@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fail unless every TCP listener on port 3000 is 127.0.0.1:3000.
+set -eu
+
+i=0
+while [ "$i" -lt 30 ]; do
+    lines=$(ss -H -ltn 'sport = :3000' || true)
+    if [ -n "$lines" ]; then
+        printf '%s\n' "$lines" | awk '
+            { if ($4 != "127.0.0.1:3000") bad = 1 }
+            END { exit bad ? 1 : 0 }
+        ' || {
+            echo "san-webui listens outside 127.0.0.1:3000" >&2
+            printf '%s\n' "$lines" >&2
+            exit 1
+        }
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+
+echo "san-webui did not open 127.0.0.1:3000" >&2
+exit 1

@@ -1,0 +1,9 @@
+# Build chroot only. Discarded after the WebUI bundle is copied out.
+build-essential
+ca-certificates
+git
+libssl-dev
+nodejs
+npm
+pkg-config
+python3
