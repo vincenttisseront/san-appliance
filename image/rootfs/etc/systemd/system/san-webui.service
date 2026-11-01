@@ -1,0 +1,33 @@
+[Unit]
+Description=SAN WebUI (loopback only)
+After=network-online.target san-webui-secrets.service
+Requires=san-webui-secrets.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sanui
+Group=sanui
+WorkingDirectory=/usr/lib/san-webui
+EnvironmentFile=-/var/lib/san/webui/webui.env
+Environment=NODE_ENV=production
+Environment=NITRO_HOST=127.0.0.1
+Environment=HOST=127.0.0.1
+Environment=NITRO_PORT=3000
+Environment=NUXT_HOST=127.0.0.1
+Environment=NUXT_PORT=3000
+Environment=NUXT_COOKIE_SECURE=false
+Environment=DB_PATH=/var/lib/san/webui/esos-webui.db
+Environment=AUTH_HEADER_ENABLED=false
+Environment=AUTH_HEADER_TRUST_WITHOUT_TOKEN=false
+ExecStart=/usr/bin/node /usr/lib/san-webui/scripts/serve-local.mjs
+ExecStartPost=/usr/local/sbin/san-webui-listen-check
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/san/webui
+
+[Install]
+WantedBy=multi-user.target

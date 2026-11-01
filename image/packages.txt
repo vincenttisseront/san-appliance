@@ -1,0 +1,16 @@
+# Appliance root. No compiler, no DKMS, no SCST, no ZFS, no Docker.
+ca-certificates
+curl
+dbus
+e2fsprogs
+iproute2
+linux-generic
+nftables
+nodejs
+openssh-server
+sudo
+systemd
+systemd-sysv
+systemd-boot
+systemd-boot-efi
+udev

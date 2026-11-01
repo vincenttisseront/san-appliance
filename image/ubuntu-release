@@ -1,0 +1,6 @@
+version=26.04.1
+suite=resolute
+arch=amd64
+mirror=http://archive.ubuntu.com/ubuntu
+components=main universe
+kernel_metapackage=linux-generic
