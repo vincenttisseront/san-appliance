@@ -1,0 +1,14 @@
+[Unit]
+Description=Present the SCST configuration from san-data
+After=var-lib-san.mount
+RequiresMountsFor=/var/lib/san
+Before=scst.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-scst-conf-seed
+
+[Install]
+WantedBy=scst.service
