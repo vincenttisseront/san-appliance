@@ -25,7 +25,15 @@ Sur une machine qui a `mmdebstrap`, `git`, `systemd-repart` et un accès au miro
 sudo image/build.sh
 ```
 
-Résultat : `image/out/rootfs.tar` et, si `systemd-repart` est là, `image/out/san-appliance.raw` (32 Gio).
+Résultat : `image/out/rootfs.tar` et, si `systemd-repart` est là, `image/out/san-appliance.raw` (18 Gio : ESP 512 Mio, deux racines de 8 Gio, `san-data` sur le reste).
+
+L'ISO d'installation, amorçable en UEFI et en BIOS :
+
+```bash
+sudo image/iso.sh
+```
+
+Elle appelle `build.sh`, puis écrit `image/out/san-appliance.iso`. Le menu par défaut ne touche à aucun disque. L'entrée « Install » n'écrit que sur le premier disque vide, et seulement si la ligne de commande du noyau contient `san.install=1`. Le disque installé démarre avec systemd-boot, `root=LABEL=san-root-a`, la WebUI sur `127.0.0.1:3000` et SSH root refusé.
 
 ## Critère
 
