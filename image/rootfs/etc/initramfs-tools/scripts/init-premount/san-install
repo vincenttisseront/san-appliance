@@ -1,0 +1,79 @@
+#!/bin/sh
+# Write the appliance image to the first empty disk when the kernel command
+# line contains san.install=1. Any other boot leaves the disks alone.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /scripts/functions
+
+if ! grep -q 'san.install=1' /proc/cmdline; then
+    exit 0
+fi
+
+echo "san-install: looking for san-appliance.raw.zst" > /dev/kmsg || true
+mkdir -p /mnt/iso
+found=""
+i=0
+while [ "$i" -lt 20 ]; do
+    for dev in /dev/sr0 /dev/sr1 /dev/vdb /dev/sda /dev/sdb; do
+        if [ ! -b "$dev" ]; then
+            continue
+        fi
+        if mount -t iso9660 -o ro "$dev" /mnt/iso 2>/dev/null; then
+            if [ -f /mnt/iso/san-appliance.raw.zst ]; then
+                found="$dev"
+                break
+            fi
+            umount /mnt/iso || true
+        fi
+    done
+    if [ -n "$found" ]; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+
+if [ -z "$found" ]; then
+    panic "san-install: san-appliance.raw.zst not found"
+fi
+
+target=""
+for path in /sys/block/*; do
+    base=$(basename "$path")
+    case "$base" in
+        loop*|ram*|sr*|fd*|dm-*|nbd*) continue ;;
+    esac
+    dev="/dev/$base"
+    if [ ! -b "$dev" ] || [ "$dev" = "$found" ]; then
+        continue
+    fi
+    if blkid "$dev" "$dev"?* 2>/dev/null | grep -q 'san-root-a'; then
+        echo "san-install: refusing ${dev}, appliance already present" > /dev/kmsg || true
+        continue
+    fi
+    if blkid -p "$dev" >/dev/null 2>&1; then
+        echo "san-install: refusing ${dev}, disk is not empty" > /dev/kmsg || true
+        continue
+    fi
+    target="$dev"
+    break
+done
+
+if [ -z "$target" ]; then
+    panic "san-install: no empty disk"
+fi
+
+echo "san-install: writing appliance to ${target}" > /dev/kmsg || true
+if ! zstd -d -c /mnt/iso/san-appliance.raw.zst > "$target"; then
+    panic "san-install: decompress failed"
+fi
+sync
+umount /mnt/iso || true
+echo "san-install: wrote ${target}, rebooting" > /dev/kmsg || true
+reboot -f
+sleep 5
+panic "san-install: reboot did not happen"

@@ -1,0 +1,5 @@
+iso9660
+virtio_blk
+virtio_pci
+virtio_net
+virtio_scsi

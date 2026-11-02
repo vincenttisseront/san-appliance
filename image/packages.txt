@@ -3,6 +3,7 @@ ca-certificates
 curl
 dbus
 e2fsprogs
+initramfs-tools
 iproute2
 linux-generic
 nftables
@@ -14,3 +15,4 @@ systemd-sysv
 systemd-boot
 systemd-boot-efi
 udev
+zstd

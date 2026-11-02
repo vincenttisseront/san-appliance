@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /usr/bin/zstd /usr/bin/zstd
+if [ -x /usr/sbin/blkid ]; then
+    copy_exec /usr/sbin/blkid /usr/sbin/blkid
+elif [ -x /sbin/blkid ]; then
+    copy_exec /sbin/blkid /sbin/blkid
+fi
+manual_add_modules iso9660
+manual_add_modules virtio_blk
+manual_add_modules virtio_pci
+manual_add_modules virtio_net
+manual_add_modules virtio_scsi

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build the skeleton rootfs and, when systemd-repart is available, a GPT disk.
+# Build the skeleton rootfs and a GPT disk (san-esp, san-root-a, san-root-b, san-data).
+# image/iso.sh packs that disk into a bootable installation ISO.
 # SCST, ZFS, Docker and the ESOS ISO are out of this script.
 set -euo pipefail
 
@@ -63,15 +64,17 @@ cleanup_build_mounts() {
 log "bootstrap build chroot (${SUITE} ${VERSION})"
 rm -rf "$BUILD_ROOT" "$ROOTFS" "$WEBUI_SRC"
 mkdir -p "$OUT" "$WORK"
-mmdebstrap --variant=minbase --arch="$ARCH" --include="$BUILD_INCLUDE" \
+mmdebstrap --variant=minbase --arch="$ARCH" \
+    --aptopt='Apt::Install-Recommends "false";' \
+    --include="$BUILD_INCLUDE" \
     "$SUITE" "$BUILD_ROOT" "${SOURCES[@]}"
 
 log "fetch esos-webui ${SHA}"
-git init "$WEBUI_SRC"
-git -C "$WEBUI_SRC" remote add origin https://github.com/vincenttisseront/esos-webui.git
-git -C "$WEBUI_SRC" fetch --depth 1 origin "$SHA"
-git -C "$WEBUI_SRC" checkout --detach FETCH_HEAD
-[ "$(git -C "$WEBUI_SRC" rev-parse HEAD)" = "$SHA" ] || die "pin mismatch"
+git -c safe.directory='*' init "$WEBUI_SRC"
+git -c safe.directory='*' -C "$WEBUI_SRC" remote add origin https://github.com/vincenttisseront/esos-webui.git
+git -c safe.directory='*' -C "$WEBUI_SRC" fetch --depth 1 origin "$SHA"
+git -c safe.directory='*' -C "$WEBUI_SRC" checkout --detach FETCH_HEAD
+[ "$(git -c safe.directory='*' -C "$WEBUI_SRC" rev-parse HEAD)" = "$SHA" ] || die "pin mismatch"
 
 mkdir -p "$BUILD_ROOT/src"
 cp -a "$WEBUI_SRC" "$BUILD_ROOT/src/esos-webui"
@@ -85,7 +88,7 @@ if [ -f /etc/resolv.conf ]; then
     cp /etc/resolv.conf "$BUILD_ROOT/etc/resolv.conf"
 fi
 
-chroot "$BUILD_ROOT" /bin/bash -lc 'cd /src/esos-webui && npm ci && npm run build'
+chroot "$BUILD_ROOT" /bin/bash -lc 'cd /src/esos-webui && NODE_OPTIONS=--max-old-space-size=3072 npm ci && NODE_OPTIONS=--max-old-space-size=3072 npm run build'
 cleanup_build_mounts
 trap - EXIT
 
@@ -93,7 +96,9 @@ trap - EXIT
 [ -f "$BUILD_ROOT/src/esos-webui/scripts/serve-local.mjs" ] || die "serve-local.mjs missing from the pinned tree"
 
 log "bootstrap appliance root (${SUITE})"
-mmdebstrap --variant=minbase --arch="$ARCH" --include="$INCLUDE" \
+mmdebstrap --variant=minbase --arch="$ARCH" \
+    --aptopt='Apt::Install-Recommends "false";' \
+    --include="$INCLUDE" \
     "$SUITE" "$ROOTFS" "${SOURCES[@]}"
 
 mkdir -p "$ROOTFS/usr/lib/san-webui"
@@ -106,7 +111,33 @@ find "$ROOTFS/usr/lib/san-webui" -type f -exec chmod 0644 {} +
 cp -a "${SCRIPT_DIR}/rootfs/." "$ROOTFS/"
 chmod 0755 \
     "$ROOTFS/usr/local/sbin/san-webui-listen-check" \
-    "$ROOTFS/usr/local/sbin/san-webui-secrets"
+    "$ROOTFS/usr/local/sbin/san-webui-secrets" \
+    "$ROOTFS/etc/initramfs-tools/hooks/san-install" \
+    "$ROOTFS/etc/initramfs-tools/scripts/init-premount/san-install"
+
+if [ ! -x "$ROOTFS/usr/bin/node" ] && [ -x "$ROOTFS/usr/bin/nodejs" ]; then
+    ln -s nodejs "$ROOTFS/usr/bin/node"
+fi
+
+log "generate initramfs"
+mount --bind /proc "$ROOTFS/proc"
+mount --bind /sys "$ROOTFS/sys"
+mount --bind /dev "$ROOTFS/dev"
+mounted_pts=0
+if mountpoint -q /dev/pts; then
+    mount --bind /dev/pts "$ROOTFS/dev/pts" && mounted_pts=1
+fi
+set +e
+chroot "$ROOTFS" bash -lc 'if compgen -G /boot/initrd.img-* > /dev/null; then update-initramfs -u -k all; else update-initramfs -c -k all; fi'
+initrd_rc=$?
+set -e
+if [ "$mounted_pts" = 1 ]; then
+    umount "$ROOTFS/dev/pts" || true
+fi
+umount "$ROOTFS/dev" || true
+umount "$ROOTFS/sys" || true
+umount "$ROOTFS/proc" || true
+[ "$initrd_rc" -eq 0 ] || die "update-initramfs failed"
 
 fstab_line='LABEL=san-data /var/lib/san ext4 noatime,nofail,x-systemd.device-timeout=10s 0 2'
 if ! grep -q 'LABEL=san-data' "$ROOTFS/etc/fstab"; then
@@ -117,7 +148,8 @@ systemctl --root="$ROOTFS" enable \
     san-webui-secrets.service \
     san-webui.service \
     nftables.service \
-    ssh.service
+    ssh.service \
+    systemd-networkd.service
 systemctl --root="$ROOTFS" mask apt-daily.timer apt-daily-upgrade.timer
 
 for forbidden in build-essential dkms scst scst-dkms zfsutils-linux docker.io docker-ce; do
@@ -135,6 +167,77 @@ if grep -q 'server/index.mjs' "$ROOTFS/etc/systemd/system/san-webui.service"; th
     die "san-webui.service must not launch server/index.mjs"
 fi
 
+populate_esp() {
+    local raw="$1"
+    local loop mnt_root mnt_esp kver efi label data_label
+    loop=$(losetup -f --show "$raw")
+    mnt_root=$(mktemp -d)
+    mnt_esp=$(mktemp -d)
+    cleanup_esp() {
+        umount "$mnt_esp" 2>/dev/null || true
+        umount "$mnt_root" 2>/dev/null || true
+        rmdir "$mnt_esp" "$mnt_root" 2>/dev/null || true
+        if [ -n "${loop:-}" ]; then
+            losetup -d "$loop" 2>/dev/null || true
+        fi
+    }
+    if ! partx -a "$loop"; then
+        cleanup_esp
+        die "partx failed on ${raw}"
+    fi
+    if [ ! -b "${loop}p1" ] || [ ! -b "${loop}p2" ] || [ ! -b "${loop}p4" ]; then
+        cleanup_esp
+        die "GPT partitions did not appear on ${loop}"
+    fi
+    if ! mount "${loop}p2" "$mnt_root"; then
+        cleanup_esp
+        die "cannot mount san-root-a"
+    fi
+    if ! mount "${loop}p1" "$mnt_esp"; then
+        cleanup_esp
+        die "cannot mount san-esp"
+    fi
+    shopt -s nullglob
+    local mods=("${mnt_root}/lib/modules"/*)
+    shopt -u nullglob
+    if [ "${#mods[@]}" -eq 0 ]; then
+        cleanup_esp
+        die "no kernel modules in san-root-a"
+    fi
+    kver=$(basename "${mods[0]}")
+    if [ ! -f "${mnt_root}/boot/vmlinuz-${kver}" ] || [ ! -f "${mnt_root}/boot/initrd.img-${kver}" ]; then
+        cleanup_esp
+        die "kernel or initrd missing for ${kver}"
+    fi
+    efi="${mnt_root}/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+    if [ ! -f "$efi" ]; then
+        cleanup_esp
+        die "systemd-bootx64.efi missing"
+    fi
+    mkdir -p "$mnt_esp/EFI/BOOT" "$mnt_esp/EFI/systemd" "$mnt_esp/loader/entries"
+    cp "$efi" "$mnt_esp/EFI/BOOT/BOOTX64.EFI"
+    cp "$efi" "$mnt_esp/EFI/systemd/systemd-bootx64.efi"
+    cp "${mnt_root}/boot/vmlinuz-${kver}" "$mnt_esp/vmlinuz"
+    cp "${mnt_root}/boot/initrd.img-${kver}" "$mnt_esp/initrd.img"
+    printf '%s\n' 'default san.conf' 'timeout 3' > "$mnt_esp/loader/loader.conf"
+    cat > "$mnt_esp/loader/entries/san.conf" << EOF
+title SAN appliance
+linux /vmlinuz
+initrd /initrd.img
+options root=LABEL=san-root-a rw console=ttyS0,115200
+EOF
+    umount "$mnt_esp"
+    label=$(blkid -s LABEL -o value "${loop}p2" || true)
+    data_label=$(blkid -s LABEL -o value "${loop}p4" || true)
+    umount "$mnt_root"
+    losetup -d "$loop"
+    loop=""
+    rmdir "$mnt_esp" "$mnt_root"
+    [ "$label" = "san-root-a" ] || die "san-root-a filesystem label is '${label}'"
+    [ "$data_label" = "san-data" ] || die "san-data filesystem label is '${data_label}'"
+    log "bootloader installed on san-esp, root label ${label}"
+}
+
 tar -C "$ROOTFS" -cf "$OUT/rootfs.tar" .
 log "rootfs archive: ${OUT}/rootfs.tar"
 
@@ -146,10 +249,11 @@ if command -v systemd-repart >/dev/null; then
     systemd-repart \
         --definitions="${SCRIPT_DIR}/repart.d" \
         --empty=create \
-        --size=32G \
+        --size=18G \
         --offline=yes \
         --copy-source="$ROOTFS" \
         "$raw"
+    populate_esp "$raw"
     log "disk image: ${raw}"
     log "san-root-b stays formatted and empty; the rootfs is copied to san-root-a"
 else
