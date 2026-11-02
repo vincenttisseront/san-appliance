@@ -61,6 +61,7 @@ cleanup_build_mounts() {
     done
 }
 
+if [ "${SAN_POPULATE_ONLY:-}" != 1 ]; then
 log "bootstrap build chroot (${SUITE} ${VERSION})"
 rm -rf "$BUILD_ROOT" "$ROOTFS" "$WEBUI_SRC"
 mkdir -p "$OUT" "$WORK"
@@ -101,9 +102,13 @@ mmdebstrap --variant=minbase --arch="$ARCH" \
     --include="$INCLUDE" \
     "$SUITE" "$ROOTFS" "${SOURCES[@]}"
 
-mkdir -p "$ROOTFS/usr/lib/san-webui"
+mkdir -p "$ROOTFS/usr/lib/san-webui/server/db"
 cp -a "$BUILD_ROOT/src/esos-webui/scripts" "$ROOTFS/usr/lib/san-webui/scripts"
 cp -a "$BUILD_ROOT/src/esos-webui/.output" "$ROOTFS/usr/lib/san-webui/.output"
+# Drizzle looks up server/db/migrations from the process working directory.
+cp -a "$BUILD_ROOT/src/esos-webui/server/db/migrations" "$ROOTFS/usr/lib/san-webui/server/db/migrations"
+cp -a "$BUILD_ROOT/src/esos-webui/package.json" "$ROOTFS/usr/lib/san-webui/package.json"
+[ -f "$ROOTFS/usr/lib/san-webui/server/db/migrations/meta/_journal.json" ] || die "drizzle journal missing"
 chown -R root:root "$ROOTFS/usr/lib/san-webui"
 find "$ROOTFS/usr/lib/san-webui" -type d -exec chmod 0755 {} +
 find "$ROOTFS/usr/lib/san-webui" -type f -exec chmod 0644 {} +
@@ -167,24 +172,37 @@ if grep -q 'server/index.mjs' "$ROOTFS/etc/systemd/system/san-webui.service"; th
     die "san-webui.service must not launch server/index.mjs"
 fi
 
+fi
+
 populate_esp() {
     local raw="$1"
     local loop mnt_root mnt_esp kver efi label data_label
     loop=$(losetup -f --show "$raw")
     mnt_root=$(mktemp -d)
     mnt_esp=$(mktemp -d)
+    esp_img=""
     cleanup_esp() {
         umount "$mnt_esp" 2>/dev/null || true
         umount "$mnt_root" 2>/dev/null || true
         rmdir "$mnt_esp" "$mnt_root" 2>/dev/null || true
+        if [ -n "${esp_img:-}" ]; then
+            rm -f "$esp_img"
+        fi
         if [ -n "${loop:-}" ]; then
             losetup -d "$loop" 2>/dev/null || true
         fi
     }
-    if ! partx -a "$loop"; then
-        cleanup_esp
-        die "partx failed on ${raw}"
-    fi
+    trap cleanup_esp EXIT
+    # udev often creates the partition devices before partx -a, which then
+    # returns EBUSY. The devices are what matter.
+    partx -a "$loop" >/dev/null 2>&1 || true
+    local wait_i
+    for wait_i in 1 2 3 4 5 6 7 8 9 10; do
+        if [ -b "${loop}p1" ] && [ -b "${loop}p2" ] && [ -b "${loop}p4" ]; then
+            break
+        fi
+        sleep 0.2
+    done
     if [ ! -b "${loop}p1" ] || [ ! -b "${loop}p2" ] || [ ! -b "${loop}p4" ]; then
         cleanup_esp
         die "GPT partitions did not appear on ${loop}"
@@ -192,10 +210,6 @@ populate_esp() {
     if ! mount "${loop}p2" "$mnt_root"; then
         cleanup_esp
         die "cannot mount san-root-a"
-    fi
-    if ! mount "${loop}p1" "$mnt_esp"; then
-        cleanup_esp
-        die "cannot mount san-esp"
     fi
     shopt -s nullglob
     local mods=("${mnt_root}/lib/modules"/*)
@@ -205,6 +219,11 @@ populate_esp() {
         die "no kernel modules in san-root-a"
     fi
     kver=$(basename "${mods[0]}")
+    # systemd-repart's ext4 copy leaves /boot empty. The kernel and initrd
+    # still live in the staged rootfs.
+    if [ ! -f "${mnt_root}/boot/vmlinuz-${kver}" ] && [ -d "${ROOTFS}/boot" ]; then
+        cp -a "${ROOTFS}/boot/." "${mnt_root}/boot/"
+    fi
     if [ ! -f "${mnt_root}/boot/vmlinuz-${kver}" ] || [ ! -f "${mnt_root}/boot/initrd.img-${kver}" ]; then
         cleanup_esp
         die "kernel or initrd missing for ${kver}"
@@ -214,19 +233,41 @@ populate_esp() {
         cleanup_esp
         die "systemd-bootx64.efi missing"
     fi
-    mkdir -p "$mnt_esp/EFI/BOOT" "$mnt_esp/EFI/systemd" "$mnt_esp/loader/entries"
-    cp "$efi" "$mnt_esp/EFI/BOOT/BOOTX64.EFI"
-    cp "$efi" "$mnt_esp/EFI/systemd/systemd-bootx64.efi"
-    cp "${mnt_root}/boot/vmlinuz-${kver}" "$mnt_esp/vmlinuz"
-    cp "${mnt_root}/boot/initrd.img-${kver}" "$mnt_esp/initrd.img"
-    printf '%s\n' 'default san.conf' 'timeout 3' > "$mnt_esp/loader/loader.conf"
-    cat > "$mnt_esp/loader/entries/san.conf" << EOF
+    # The build host has no vfat driver. Partition devices on this kernel
+    # sometimes report a short size, so the ESP is built as a plain file and
+    # written at the GPT offset.
+    command -v mkfs.vfat >/dev/null || { cleanup_esp; die "dosfstools is required to fill san-esp"; }
+    command -v mcopy >/dev/null || { cleanup_esp; die "mtools is required to fill san-esp"; }
+    local start_sectors sector_count esp_bytes
+    start_sectors=$(partx -o START -g -n 1 "$raw" | tr -d ' ')
+    sector_count=$(partx -o SECTORS -g -n 1 "$raw" | tr -d ' ')
+    esp_bytes=$((sector_count * 512))
+    [ "$esp_bytes" -ge $((500 * 1024 * 1024)) ] || { cleanup_esp; die "san-esp is ${esp_bytes} bytes"; }
+    esp_img=$(mktemp)
+    truncate -s "$esp_bytes" "$esp_img"
+    mkfs.vfat -F 32 -n SAN-ESP "$esp_img"
+    export MTOOLS_SKIP_CHECK=1
+    mmd -i "$esp_img" ::/EFI ::/EFI/BOOT ::/EFI/systemd ::/loader ::/loader/entries
+    mcopy -i "$esp_img" "$efi" ::/EFI/BOOT/BOOTX64.EFI
+    mcopy -i "$esp_img" "$efi" ::/EFI/systemd/systemd-bootx64.efi
+    mcopy -i "$esp_img" "${mnt_root}/boot/vmlinuz-${kver}" ::/vmlinuz
+    mcopy -i "$esp_img" "${mnt_root}/boot/initrd.img-${kver}" ::/initrd.img
+    local loader_conf entry
+    loader_conf=$(mktemp)
+    entry=$(mktemp)
+    printf '%s\n' 'default san.conf' 'timeout 3' > "$loader_conf"
+    cat > "$entry" << EOF
 title SAN appliance
 linux /vmlinuz
 initrd /initrd.img
 options root=LABEL=san-root-a rw console=ttyS0,115200
 EOF
-    umount "$mnt_esp"
+    mcopy -i "$esp_img" "$loader_conf" ::/loader/loader.conf
+    mcopy -i "$esp_img" "$entry" ::/loader/entries/san.conf
+    rm -f "$loader_conf" "$entry"
+    dd if="$esp_img" of="$raw" bs=512 seek="$start_sectors" conv=notrunc status=none
+    rm -f "$esp_img"
+    esp_img=""
     label=$(blkid -s LABEL -o value "${loop}p2" || true)
     data_label=$(blkid -s LABEL -o value "${loop}p4" || true)
     umount "$mnt_root"
@@ -235,8 +276,19 @@ EOF
     rmdir "$mnt_esp" "$mnt_root"
     [ "$label" = "san-root-a" ] || die "san-root-a filesystem label is '${label}'"
     [ "$data_label" = "san-data" ] || die "san-data filesystem label is '${data_label}'"
+    trap - EXIT
     log "bootloader installed on san-esp, root label ${label}"
 }
+
+if [ "${SAN_POPULATE_ONLY:-}" = 1 ]; then
+    raw="${OUT}/san-appliance.raw"
+    [ -f "$raw" ] || die "missing ${raw}"
+    [ -d "${ROOTFS}/boot" ] || die "missing staged /boot; cannot refill the ESP"
+    populate_esp "$raw"
+    log "disk image: ${raw}"
+    log "done"
+    exit 0
+fi
 
 tar -C "$ROOTFS" -cf "$OUT/rootfs.tar" .
 log "rootfs archive: ${OUT}/rootfs.tar"
