@@ -38,13 +38,17 @@ cleanup() {
     losetup -d "$loop" 2>/dev/null || true
 }
 trap cleanup EXIT
-partx -a "$loop"
-mnt=$(mktemp -d)
-mount "${loop}p1" "$mnt"
-cp "$mnt/vmlinuz" "$TREE/boot/vmlinuz"
-cp "$mnt/initrd.img" "$TREE/boot/initrd.img"
-umount "$mnt"
-rmdir "$mnt"
+partx -a "$loop" >/dev/null 2>&1 || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -b "${loop}p1" ] && break
+    sleep 0.2
+done
+[ -b "${loop}p1" ] || die "ESP partition missing on ${RAW}"
+export MTOOLS_SKIP_CHECK=1
+start_sectors=$(partx -o START -g -n 1 "$RAW")
+esp="${RAW}@@$((start_sectors * 512))"
+mcopy -i "$esp" ::/vmlinuz "$TREE/boot/vmlinuz"
+mcopy -i "$esp" ::/initrd.img "$TREE/boot/initrd.img"
 losetup -d "$loop"
 trap - EXIT
 cp "$ZST" "$TREE/san-appliance.raw.zst"
