@@ -1,0 +1,24 @@
+#!/bin/sh
+# Copy the shipped SCST config onto san-data, then present it as /etc/scst.conf.
+set -eu
+
+template=/usr/lib/san/scst.conf
+store=/var/lib/san/etc/scst.conf
+presented=/etc/scst.conf
+
+[ -f "$template" ] || {
+    echo "san-scst-conf: missing ${template}" >&2
+    exit 1
+}
+
+install -d -m 0755 /var/lib/san/etc
+if [ ! -e "$store" ]; then
+    install -m 0644 "$template" "$store"
+fi
+
+if [ ! -e "$presented" ]; then
+    touch "$presented"
+fi
+if ! mountpoint -q "$presented"; then
+    mount --bind "$store" "$presented"
+fi

@@ -125,6 +125,7 @@ cp -a "${SCRIPT_DIR}/rootfs/." "$ROOTFS/"
 chmod 0755 \
     "$ROOTFS/usr/local/sbin/san-webui-listen-check" \
     "$ROOTFS/usr/local/sbin/san-webui-secrets" \
+    "$ROOTFS/usr/local/sbin/san-scst-conf-seed" \
     "$ROOTFS/etc/initramfs-tools/hooks/san-install" \
     "$ROOTFS/etc/initramfs-tools/scripts/init-premount/san-install"
 
@@ -160,6 +161,7 @@ fi
 systemctl --root="$ROOTFS" enable \
     san-webui-secrets.service \
     san-webui.service \
+    san-scst-conf.service \
     nftables.service \
     ssh.service \
     systemd-networkd.service
