@@ -2,7 +2,7 @@
 
 Image d'appliance SAN sur Ubuntu 26.04.1 LTS (Resolute Raccoon, suite `resolute`, amd64).
 
-Ce dépôt construit la racine et le disque. Il n'embarque pas SCST, ZFS, Docker, ni une ISO ESOS. La racine du squelette reste inscriptible : le passage en lecture seule vient avec le durcissement de livraison.
+Ce dépôt construit la racine, les modules SCST et le disque. Il n'embarque pas ZFS, Docker, ni une ISO ESOS. La racine reste inscriptible : le passage en lecture seule vient avec le durcissement de livraison.
 
 ## Ce que le squelette démarre
 
@@ -15,7 +15,9 @@ Ce dépôt construit la racine et le disque. Il n'embarque pas SCST, ZFS, Docker
 - Secrets JWT et clé AES créés au premier boot dans `/var/lib/san/webui/webui.env` (`0640`, `sanui`). Absents du git.
 - `AUTH_HEADER_TRUST_WITHOUT_TOKEN=false`.
 
-Les écrans qui mutent un SAN passent encore par SSH dans la WebUI. Ce squelette ne les branche pas sur la machine locale, et il n'ouvre pas de SSH root vers `127.0.0.1`.
+SCST est compilé au build contre les en-têtes du noyau de l'image, depuis `SCST-project/scst` au commit `6f95ff0714b3cffcab9d5fc63fd0228cbc6f9198` (master, contient le port noyau 7.0 `9003543` et les correctifs `backport.h` de master ; `ccc7ead` est l'équivalent sur la branche nightly, pas un ancêtre de master). `make dpkg` produit les paquets. L'image installe `scst`, `scstadmin` et `iscsi-scst`. Elle n'installe pas `scst-dkms` ni le compilateur. Les modules du périmètre sont `scst`, `iscsi-scst`, `isert-scst`, `qla2x00tgt`, `qla2xxx_scst`, `ib_srpt` (sous `extra/`, à la place du module LIO), `scst_vdisk` et `scst_disk`. `/etc/modprobe.d/san-scst.conf` écarte LIO et l'initiateur `qla2xxx`.
+
+Les écrans qui mutent un SAN passent encore par SSH dans la WebUI. Cette image ne les branche pas sur la machine locale, et elle n'ouvre pas de SSH root vers `127.0.0.1`.
 
 ## Construire
 

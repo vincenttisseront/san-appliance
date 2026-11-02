@@ -1,7 +1,8 @@
 #!/bin/bash
-# Build the skeleton rootfs and a GPT disk (san-esp, san-root-a, san-root-b, san-data).
+# Build the appliance rootfs and a GPT disk (san-esp, san-root-a, san-root-b, san-data).
+# image/scst.sh compiles SCST and installs the binary packages, not scst-dkms.
 # image/iso.sh packs that disk into a bootable installation ISO.
-# SCST, ZFS, Docker and the ESOS ISO are out of this script.
+# ZFS, Docker and the ESOS ISO are out of this script.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -60,6 +61,13 @@ cleanup_build_mounts() {
         fi
     done
 }
+
+if [ "${SAN_SCST_ONLY:-}" = 1 ]; then
+    [ -d "$ROOTFS/lib/modules" ] || die "appliance root is missing; run a full build first"
+    "${SCRIPT_DIR}/scst.sh"
+    log "scst packages installed"
+    exit 0
+fi
 
 if [ "${SAN_POPULATE_ONLY:-}" != 1 ]; then
 log "bootstrap build chroot (${SUITE} ${VERSION})"
@@ -157,11 +165,9 @@ systemctl --root="$ROOTFS" enable \
     systemd-networkd.service
 systemctl --root="$ROOTFS" mask apt-daily.timer apt-daily-upgrade.timer
 
-for forbidden in build-essential dkms scst scst-dkms zfsutils-linux docker.io docker-ce; do
-    status=$(chroot "$ROOTFS" dpkg-query -W -f='${Status}' "$forbidden" 2>/dev/null || true)
-    case "$status" in
-        *installed*) die "${forbidden} is installed in the appliance root" ;;
-    esac
+for forbidden in build-essential dkms scst-dkms zfsutils-linux docker.io docker-ce; do
+    state=$(chroot "$ROOTFS" dpkg-query -W -f='${db:Status-Status}' "$forbidden" 2>/dev/null || true)
+    [ "$state" = "installed" ] && die "${forbidden} is installed in the appliance root"
 done
 
 [ -x "$ROOTFS/usr/bin/node" ] || die "nodejs did not provide /usr/bin/node"
@@ -171,6 +177,8 @@ grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOTFS/etc/systemd/system
 if grep -q 'server/index.mjs' "$ROOTFS/etc/systemd/system/san-webui.service"; then
     die "san-webui.service must not launch server/index.mjs"
 fi
+
+"${SCRIPT_DIR}/scst.sh"
 
 fi
 

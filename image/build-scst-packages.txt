@@ -1,0 +1,19 @@
+# Build chroot for SCST only. Never installed into the appliance root.
+bc
+bison
+build-essential
+ca-certificates
+debhelper
+devscripts
+dwarves
+dpkg-dev
+fakeroot
+flex
+git
+kmod
+libelf-dev
+libssl-dev
+perl
+python3
+quilt
+rsync
