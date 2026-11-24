@@ -1,0 +1,14 @@
+[Unit]
+Description=Repose les adresses admin et stockage enregistrées
+After=san-conf-bind.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-net-apply
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

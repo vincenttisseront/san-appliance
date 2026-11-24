@@ -15,3 +15,7 @@ eject
 dbus
 less
 passwd
+python3
+python3-rtslib-fb
+targetcli-fb
+open-iscsi

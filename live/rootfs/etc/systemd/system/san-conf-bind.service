@@ -1,0 +1,15 @@
+[Unit]
+Description=Monte le support de conf étiqueté SANCONF s'il contient déjà un choix
+DefaultDependencies=no
+After=local-fs.target
+Before=san-net-apply.service san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-conf-bind
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

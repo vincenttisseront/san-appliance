@@ -55,11 +55,46 @@ done
 chroot "$ROOT" dpkg-query -W -f='${db:Status-Status}' casper | grep -qx installed || die "casper is not installed"
 chroot "$ROOT" dpkg-query -W -f='${db:Status-Status}' localechooser-data | grep -qx installed || die "localechooser-data is not installed"
 
+for required in python3-rtslib-fb targetcli-fb open-iscsi; do
+    state=$(chroot "$ROOT" dpkg-query -W -f='${db:Status-Status}' "$required" 2>/dev/null || true)
+    [ "$state" = "installed" ] || die "${required} is not installed in the live root"
+done
+
 log "overlay"
 cp -a "$SCRIPT_DIR/rootfs/." "$ROOT/"
-chmod 0755 "$ROOT/usr/local/sbin/san-live-boot"
+install_sh=$REPO_ROOT/live24/tui/install.sh
+[ -x "$install_sh" ] || die "missing $install_sh"
+"$install_sh" "$ROOT"
+chmod 0755 \
+    "$ROOT/usr/local/sbin/san-live-boot" \
+    "$ROOT/usr/local/sbin/san-conf-bind" \
+    "$ROOT/usr/local/sbin/san-net-apply" \
+    "$ROOT/usr/local/sbin/san-restore-boot" \
+    "$ROOT/usr/local/sbin/san-tui"
+chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
+chmod 0755 "$ROOT/etc/sudoers.d"
+chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
+chown root:root \
+    "$ROOT/usr/local/sbin/san-live-boot" \
+    "$ROOT/usr/local/sbin/san-conf-bind" \
+    "$ROOT/usr/local/sbin/san-net-apply" \
+    "$ROOT/usr/local/sbin/san-restore-boot" \
+    "$ROOT/usr/local/sbin/san-tui" \
+    "$ROOT/usr/lib/san-tui" \
+    "$ROOT/etc/systemd/system/san-live-boot.service" \
+    "$ROOT/etc/systemd/system/san-conf-bind.service" \
+    "$ROOT/etc/systemd/system/san-net-apply.service" \
+    "$ROOT/etc/systemd/system/san-inventory.service" \
+    "$ROOT/etc/systemd/system/san-restore.service" \
+    "$ROOT/etc/systemd/system/san-restore.service.d" \
+    "$ROOT/etc/systemd/system/san-restore.service.d/live.conf"
 printf 'LANG=C.UTF-8\n' > "$ROOT/etc/default/locale"
-systemctl --root="$ROOT" enable san-live-boot.service
+systemctl --root="$ROOT" enable \
+    san-live-boot.service \
+    san-inventory.service \
+    san-restore.service \
+    san-conf-bind.service \
+    san-net-apply.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -84,6 +119,12 @@ printf '%s\n' "$initrd_list" | grep -q 'scripts/casper$' || die "initrd has no c
 if ! printf '%s\n' "$initrd_list" | grep -q 'isofs.ko'; then
     die "initrd has no isofs module; the live CD would not mount"
 fi
+find "$ROOT/lib/modules/$kver" -name 'target_core_mod.ko*' | grep -q . \
+    || die "kernel $kver has no target_core_mod"
+find "$ROOT/lib/modules/$kver" -name 'iscsi_target_mod.ko*' | grep -q . \
+    || die "kernel $kver has no iscsi_target_mod"
+grep -q '^CONFIG_CONFIGFS_FS=' "$ROOT/boot/config-$kver" \
+    || die "kernel $kver has no configfs"
 
 log "squashfs"
 mksquashfs "$ROOT" "$TREE/casper/filesystem.squashfs" -comp gzip -noappend -no-progress
@@ -131,6 +172,8 @@ doc = {
     "secure_boot": "not-tested",
     "bit_reproducible": False,
     "installer": False,
+    "lio": "python3-rtslib-fb",
+    "tui": "san-tui",
     "default_entry": "SAN appliance live",
     "diagnostic_entry": "SAN appliance diagnostic (no LUN export)",
     "persistence": "nopersistent",
