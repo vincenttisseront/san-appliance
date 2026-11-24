@@ -37,6 +37,10 @@ sudo image/iso.sh
 
 Elle appelle `build.sh`, puis écrit `image/out/san-appliance.iso`. Le menu par défaut ne touche à aucun disque. L'entrée « Install » n'écrit que sur le premier disque vide, et seulement si la ligne de commande du noyau contient `san.install=1`. Le disque installé démarre avec systemd-boot, `root=LABEL=san-root-a`, la WebUI sur `127.0.0.1:3000` et SSH root refusé.
 
+## ISO live Ubuntu 24.04
+
+À côté de l'image 26.04, `make doctor` puis `make iso` construisent une ISO live Noble (casper, SquashFS, GRUB BIOS et UEFI). La première entrée du menu est le mode live, pas un installateur. Le détail est dans `live/README.md`.
+
 ## Critère
 
 Une VM démarrée sur cette image doit montrer `127.0.0.1:3000` seulement (`ss -H -ltn 'sport = :3000'`), répondre à `curl -fsS http://127.0.0.1:3000/api/health`, refuser `ssh root@vm`, et dropper un paquet TCP/3000 arrivé par une autre interface.

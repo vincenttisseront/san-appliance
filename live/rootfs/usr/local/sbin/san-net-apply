@@ -1,0 +1,38 @@
+#!/usr/bin/python3
+"""Apply the admin and storage addresses saved in exports.json. No portal."""
+
+import json
+import subprocess
+import time
+from pathlib import Path
+
+
+def main():
+    doc_path = Path("/var/lib/san/conf/exports.json")
+    if not doc_path.is_file():
+        return
+    document = json.loads(doc_path.read_text(encoding="utf-8"))
+    network = document.get("network") or {}
+    for role in ("admin", "storage"):
+        item = network.get(role) or {}
+        iface = item.get("iface") or ""
+        address = item.get("address") or ""
+        if not iface or not address:
+            continue
+        deadline = time.time() + 20
+        sysfs = Path("/sys/class/net") / iface
+        while time.time() < deadline and not sysfs.exists():
+            time.sleep(1)
+        if not sysfs.exists():
+            print("san-net-apply: interface absente {}".format(iface))
+            continue
+        subprocess.run(["ip", "link", "set", iface, "up"], check=False)
+        subprocess.run(
+            ["ip", "addr", "replace", address, "dev", iface],
+            check=False,
+        )
+        print("san-net-apply: {} {} dev {}".format(role, address, iface))
+
+
+if __name__ == "__main__":
+    main()

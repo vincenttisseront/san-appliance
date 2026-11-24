@@ -1,0 +1,16 @@
+#!/bin/sh
+# Retry a transient LIO failure. A missing disk is not retried: restore
+# reports it once and leaves that target down.
+set -eu
+
+attempt=0
+while [ "$attempt" -lt 8 ]; do
+    out=$(/usr/local/sbin/san-tui restore 2>&1) || true
+    printf '%s\n' "$out"
+    if ! printf '%s\n' "$out" | grep -q 'échec LIO'; then
+        exit 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+done
+exit 1

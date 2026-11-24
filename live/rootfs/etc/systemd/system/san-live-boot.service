@@ -1,0 +1,14 @@
+[Unit]
+Description=Record SAN live boot mode
+After=systemd-modules-load.service
+Before=getty.target san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-live-boot
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
