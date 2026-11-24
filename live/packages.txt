@@ -1,0 +1,17 @@
+# Noble packages for the live root. Recommends are off.
+# localechooser-data satisfies casper's "localechooser-data | ubiquity"
+# alternative so the installer is not pulled in.
+linux-image-generic
+casper
+localechooser-data
+initramfs-tools
+systemd-sysv
+sudo
+locales
+iproute2
+ca-certificates
+e2fsprogs
+eject
+dbus
+less
+passwd

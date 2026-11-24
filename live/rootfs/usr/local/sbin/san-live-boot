@@ -1,0 +1,35 @@
+#!/bin/sh
+# Record the boot mode. Diagnostic mode must not export a LUN.
+set -eu
+
+mode=live
+cmdline=$(cat /proc/cmdline)
+case " $cmdline " in
+    *" san.mode=diagnostic "*) mode=diagnostic ;;
+esac
+
+mkdir -p /run/san-live
+printf '%s\n' "$mode" > /run/san-live/mode
+
+# casper gives the console user an empty password. Lock it so it is not a
+# credential. Local autologin does not need it. Nothing here is written to a
+# disk other than the live overlay in RAM.
+if id sanadmin >/dev/null 2>&1; then
+    passwd -l sanadmin >/dev/null 2>&1 || true
+fi
+
+msg="san-live: mode=$mode"
+if awk '{print $1}' /proc/modules | grep -qx target_core_mod; then
+    msg="$msg export-module=present"
+else
+    msg="$msg export-module=absent"
+fi
+
+if [ "$mode" = diagnostic ]; then
+    # Units that a later image layer may add. Missing units are ignored.
+    systemctl mask --runtime san-iscsi.service san-iscsi-restore.service san-target.service >/dev/null 2>&1 || true
+    msg="$msg lun-export=disabled"
+fi
+
+printf '%s\n' "$msg"
+logger -t san-live -- "$msg" || true
