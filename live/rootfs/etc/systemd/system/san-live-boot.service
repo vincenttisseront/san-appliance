@@ -1,7 +1,7 @@
 [Unit]
 Description=Record SAN live boot mode
 After=systemd-modules-load.service
-Before=getty.target
+Before=getty.target san-restore.service
 
 [Service]
 Type=oneshot

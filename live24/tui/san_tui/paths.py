@@ -6,12 +6,16 @@ from pathlib import Path
 
 class SanPaths:
     def __init__(self, root=None):
-        base = Path(root if root is not None else os.environ.get("SAN_ROOT", ""))
+        # Path("") s'affiche ".", donc le test se fait sur la chaîne brute.
         # Un root vide désigne la racine du système. Un root de test est un répertoire.
-        if str(base) in ("", "/"):
+        if root is None:
+            raw = os.environ.get("SAN_ROOT", "")
+        else:
+            raw = root
+        if raw is None or str(raw) in ("", "/"):
             self.root = Path("/")
         else:
-            self.root = base
+            self.root = Path(raw)
         self.etc = self.root / "etc" / "san"
         self.run = self.root / "run" / "san"
         self.conf = self.root / "var" / "lib" / "san" / "conf"

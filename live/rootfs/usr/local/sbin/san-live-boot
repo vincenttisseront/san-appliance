@@ -27,7 +27,9 @@ fi
 
 if [ "$mode" = diagnostic ]; then
     # Units that a later image layer may add. Missing units are ignored.
-    systemctl mask --runtime san-iscsi.service san-iscsi-restore.service san-target.service >/dev/null 2>&1 || true
+    systemctl mask --runtime \
+        san-iscsi.service san-iscsi-restore.service san-target.service \
+        san-restore.service >/dev/null 2>&1 || true
     msg="$msg lun-export=disabled"
 fi
 

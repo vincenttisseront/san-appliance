@@ -3,3 +3,5 @@ image/work/
 *.raw
 dist/
 live/work/
+__pycache__/
+*.pyc

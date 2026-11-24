@@ -1,0 +1,32 @@
+#!/bin/sh
+# Mount only the filesystem the operator labeled SANCONF, and only when it
+# already holds chosen.json. Other disks are not opened for writing.
+set -eu
+
+if mountpoint -q /var/lib/san/conf; then
+    exit 0
+fi
+
+dev=
+i=0
+while [ "$i" -lt 5 ]; do
+    dev=$(findfs LABEL=SANCONF 2>/dev/null || true)
+    if [ -n "$dev" ]; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+[ -n "$dev" ] || exit 0
+
+mkdir -p /var/lib/san/conf /etc/san /run/san-conf-probe
+mount -o ro,noatime "$dev" /run/san-conf-probe
+if [ -f /run/san-conf-probe/chosen.json ]; then
+    cp -a /run/san-conf-probe/chosen.json /etc/san/chosen.json
+    umount /run/san-conf-probe
+    mount -o noatime "$dev" /var/lib/san/conf
+    printf 'san-conf-bind: %s -> /var/lib/san/conf\n' "$dev"
+else
+    umount /run/san-conf-probe
+    printf 'san-conf-bind: %s has no chosen.json, left unmounted\n' "$dev"
+fi

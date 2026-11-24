@@ -260,5 +260,14 @@ class RedactFailureTests(unittest.TestCase):
         self.assertIn("échec LIO", text)
 
 
+class PathTests(unittest.TestCase):
+    def test_empty_root_is_the_system_root(self):
+        paths = SanPaths()
+        self.assertEqual(paths.root, Path("/"))
+        self.assertEqual(paths.choice, Path("/etc/san/chosen.json"))
+        self.assertEqual(paths.conf, Path("/var/lib/san/conf"))
+        self.assertEqual(SanPaths("").choice, Path("/etc/san/chosen.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

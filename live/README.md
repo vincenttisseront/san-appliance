@@ -18,4 +18,6 @@ La première entrée GRUB est « SAN appliance live » (`boot=casper`). Il n'y a
 
 Le compte console `sanadmin` est ouvert en local par autologin. Le mot de passe vide posé par casper est verrouillé au boot. OpenSSH n'est pas installé. Aucun secret n'est dans l'ISO.
 
-Cette image ne contient pas la TUI ni la cible iSCSI. Elle ne charge pas `target_core_mod`.
+L'image embarque `python3-rtslib-fb`, `targetcli-fb`, les modules `target_core_mod` et `iscsi_target_mod`, et la TUI `san-tui` (`live24/tui`). Le boot n'exporte rien tant que `/etc/san/chosen.json` est absent. Le mode diagnostic masque `san-restore.service`.
+
+Le support de conf choisi par l'opérateur est un système de fichiers étiqueté `SANCONF`. Au boot, `san-conf-bind` ne monte que cette étiquette, et seulement si elle contient déjà `chosen.json`. Il ne formate pas et ne touche pas aux autres disques. `san-net-apply` repose ensuite les adresses enregistrées dans `exports.json`, puis `san-restore` rétablit les cibles dont le volume, le WWN, la série et la taille collent encore. `open-iscsi` est présent pour une VM d'essai ; il n'a aucun nœud configuré dans l'image.
