@@ -1,0 +1,13 @@
+[Unit]
+Description=Rétablit les exports iSCSI après contrôle réseau, volume et identifiant
+After=san-inventory.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/san/chosen.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-tui restore
+
+[Install]
+WantedBy=multi-user.target

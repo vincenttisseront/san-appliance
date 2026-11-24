@@ -1,0 +1,14 @@
+[Unit]
+Description=Inventaire SAN (aucun export, aucun formatage)
+Documentation=file:///usr/lib/san-tui/README.md
+DefaultDependencies=no
+After=local-fs.target
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-tui inventory
+
+[Install]
+WantedBy=multi-user.target
