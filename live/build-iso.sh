@@ -65,6 +65,7 @@ cp -a "$SCRIPT_DIR/rootfs/." "$ROOT/"
 install_sh=$REPO_ROOT/live24/tui/install.sh
 [ -x "$install_sh" ] || die "missing $install_sh"
 "$install_sh" "$ROOT"
+"$SCRIPT_DIR/install-webui.sh" "$ROOT"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
 chmod 0755 \
@@ -79,7 +80,9 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-ab" \
     "$ROOT/usr/local/sbin/san-ollama" \
     "$ROOT/usr/local/sbin/san-ssh" \
-    "$ROOT/usr/local/sbin/san-tui"
+    "$ROOT/usr/local/sbin/san-tui" \
+    "$ROOT/usr/local/sbin/san-webui-listen-check" \
+    "$ROOT/usr/local/sbin/san-webui-secrets"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -92,7 +95,9 @@ chown -R root:root \
     "$ROOT/etc/mdadm" \
     "$ROOT/etc/lvm" \
     "$ROOT/etc/profile.d/san-otp-lock.sh" \
-    "$ROOT/usr/lib/udev/rules.d/64-md-raid-assembly.rules"
+    "$ROOT/usr/lib/udev/rules.d/64-md-raid-assembly.rules" \
+    "$ROOT/etc/sysusers.d" \
+    "$ROOT/etc/tmpfiles.d"
 printf 'LANG=C.UTF-8\n' > "$ROOT/etc/default/locale"
 rm -f "$ROOT"/etc/ssh/ssh_host_*
 if [ -d "$ROOT/etc/ssh/sshd_config.d" ]; then
@@ -123,7 +128,9 @@ systemctl --root="$ROOT" enable \
     san-perf.service \
     san-ab.service \
     san-ollama.service \
-    san-ssh.service
+    san-ssh.service \
+    san-webui-secrets.service \
+    san-webui.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -172,6 +179,13 @@ if "uring" in names or "io_uring" in names:
     text = "rtslib-fb expose un paramètre io_uring."
 Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
+
+[ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
+grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
+if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then
+    die "san-webui.service must not launch server/index.mjs"
+fi
+[ -x "$ROOT/usr/bin/node" ] || die "nodejs did not provide /usr/bin/node"
 
 log "squashfs"
 mksquashfs "$ROOT" "$TREE/casper/filesystem.squashfs" -comp gzip -noappend -no-progress
@@ -224,9 +238,11 @@ if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
     git_dirty=true
 fi
 built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-python3 - "$meta" "$kver" "$git_commit" "$git_dirty" "$built_at" "$sha" << 'PY'
+webui_commit=$(tr -d '[:space:]' < "$ROOT/usr/lib/san-webui/SOURCE_COMMIT")
+node_version=$(chroot "$ROOT" /usr/bin/node -p 'process.version')
+python3 - "$meta" "$kver" "$git_commit" "$git_dirty" "$built_at" "$sha" "$webui_commit" "$node_version" << 'PY'
 import json, sys
-path, kver, commit, dirty, built_at, sha = sys.argv[1:]
+path, kver, commit, dirty, built_at, sha, webui_commit, node_version = sys.argv[1:]
 doc = {
     "name": "san-appliance-live",
     "ubuntu": "24.04",
@@ -241,6 +257,10 @@ doc = {
     "installer": False,
     "lio": "python3-rtslib-fb",
     "tui": "san-tui",
+    "webui": "esos-webui",
+    "webui_commit": webui_commit,
+    "webui_listen": "127.0.0.1:3000",
+    "node": node_version,
     "default_entry": "SAN appliance live",
     "diagnostic_entry": "SAN appliance diagnostic (no LUN export)",
     "persistence": "nopersistent",
