@@ -21,6 +21,8 @@ La première entrée GRUB est « SAN appliance live » (`boot=casper`). Il n'y a
 
 Le compte `sanadmin` n'est plus en autologin. Un mot de passe à usage unique est écrit sur la console série, puis verrouillé après la première session. Il n'est pas un secret de l'ISO. SSH est installé, refuse root et refuse les mots de passe, et n'écoute que l'adresse d'administration une fois le support de conf accepté. Aucune clé n'est dans l'image.
 
+La page `http://127.0.0.1:3000/appliance-update` télécharge une release GitHub de `vincenttisseront/san-appliance` (`san-appliance-app.tar.gz` et son fichier `.sha256`). L'empreinte est vérifiée avant d'écrire le slot inactif sous le support de conf. Si le nouveau slot ne répond pas, le pointeur revient une fois au slot précédent. Un échec de téléchargement ou d'empreinte ne modifie pas ce pointeur, ni les exports, ni le réseau. Le jeton, s'il existe, est lu dans `/etc/san/github.token` (mode 0600) au moment de l'appel et n'est pas mis dans l'ISO.
+
 L'image embarque la WebUI loopback (`esos-webui`, pin `image/third_party/esos-webui.sha256`). `live/install-webui.sh` la reconstruit sur l'hôte Noble, sans Docker, avec Node 22.23.4, puis copie le bundle et ce binaire dans le rootfs. `san-webui.service` lance `scripts/serve-local.mjs`, qui force l'écoute sur `127.0.0.1:3000`. Le compte `sanui` n'a pas de shell de connexion. `NUXT_JWT_SECRET` et `NUXT_ENCRYPTION_KEY` sont créés au boot dans `/var/lib/san/webui/webui.env` et ne sont pas dans l'ISO.
 
 L'image embarque `python3-rtslib-fb`, `targetcli-fb`, les modules `target_core_mod` et `iscsi_target_mod`, et la TUI `san-tui` (`live24/tui`). Le boot n'exporte rien tant que `/etc/san/chosen.json` est absent. Le mode diagnostic masque `san-restore.service`.
