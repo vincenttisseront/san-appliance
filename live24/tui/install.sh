@@ -4,6 +4,7 @@ set -eu
 dest=${1:?racine de destination}
 src=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 mkdir -p "$dest/usr/lib/san-tui" "$dest/usr/local/sbin" "$dest/etc/systemd/system" "$dest/etc/san"
+rm -rf "$dest/usr/lib/san-tui/san_tui"
 cp -a "$src/san_tui" "$dest/usr/lib/san-tui/san_tui"
 cp -a "$src/bin/san-tui" "$dest/usr/local/sbin/san-tui"
 cp -a "$src/systemd/san-inventory.service" "$dest/etc/systemd/system/san-inventory.service"

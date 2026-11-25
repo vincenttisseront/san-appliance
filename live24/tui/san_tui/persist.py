@@ -22,12 +22,13 @@ def select_support(paths, role, volume, typed, mounter=None):
     require_confirmation(volume["id"], typed)
     paths.ensure_runtime()
     choice = _read_json(paths.choice) or {"version": 1, "conf": None, "data": None}
-    choice["version"] = 1
+    choice["version"] = 2
     choice[role] = {
         "id": volume["id"],
         "wwn": volume.get("wwn") or "",
         "serial": volume.get("serial") or "",
         "size": volume.get("size"),
+        "block_size": volume.get("block_size"),
     }
     _write_json(paths.choice, choice, 0o644)
     if mounter is not None and role == "conf":
@@ -39,7 +40,7 @@ def load_choice(paths):
     data = _read_json(paths.choice)
     if data is None:
         return None
-    if not isinstance(data, dict) or data.get("version") != 1:
+    if not isinstance(data, dict) or data.get("version") not in (1, 2):
         raise PersistError("choix de support invalide")
     return data
 
@@ -130,3 +131,26 @@ def _write_json(path, data, mode):
 
 def note_invalid(paths, message):
     return add_alert(paths, "error", message)
+
+
+def rollback_files(paths):
+    """Reprend la sauvegarde précédente. N'invente pas une cible."""
+    root = paths.conf / "backups"
+    if not root.is_dir():
+        raise PersistError("aucune sauvegarde")
+    dirs = sorted(path for path in root.iterdir() if path.is_dir())
+    if not dirs:
+        raise PersistError("aucune sauvegarde")
+    src = dirs[-1]
+    exported = src / "exports.json"
+    if exported.is_file():
+        shutil.copy2(exported, paths.conf / "exports.json")
+    else:
+        _write_json(paths.conf / "exports.json", {"version": 1, "targets": []}, 0o644)
+    secret = src / "secrets.json"
+    if secret.is_file():
+        shutil.copy2(secret, paths.conf / "secrets.json")
+        os.chmod(paths.conf / "secrets.json", 0o600)
+    else:
+        _write_json(paths.conf / "secrets.json", {}, 0o600)
+    return str(src)

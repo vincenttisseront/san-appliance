@@ -44,11 +44,11 @@ mmdebstrap --variant=minbase \
     --aptopt='APT::Get::AllowUnauthenticated "false";' \
     --include="$include" \
     noble "$ROOT" \
-    "deb http://archive.ubuntu.com/ubuntu noble main" \
-    "deb http://archive.ubuntu.com/ubuntu noble-updates main" \
+    "deb http://archive.ubuntu.com/ubuntu noble main universe" \
+    "deb http://archive.ubuntu.com/ubuntu noble-updates main universe" \
     "deb http://security.ubuntu.com/ubuntu noble-security main"
 
-for forbidden in ubiquity ubiquity-frontend-gtk subiquity curtin cloud-init openssh-server; do
+for forbidden in ubiquity ubiquity-frontend-gtk subiquity curtin cloud-init; do
     state=$(chroot "$ROOT" dpkg-query -W -f='${db:Status-Status}' "$forbidden" 2>/dev/null || true)
     [ "$state" = "installed" ] && die "${forbidden} is installed in the live root"
 done
@@ -65,36 +65,65 @@ cp -a "$SCRIPT_DIR/rootfs/." "$ROOT/"
 install_sh=$REPO_ROOT/live24/tui/install.sh
 [ -x "$install_sh" ] || die "missing $install_sh"
 "$install_sh" "$ROOT"
+install -d -m 0755 "$ROOT/usr/share/san"
+cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
 chmod 0755 \
     "$ROOT/usr/local/sbin/san-live-boot" \
     "$ROOT/usr/local/sbin/san-conf-bind" \
     "$ROOT/usr/local/sbin/san-net-apply" \
     "$ROOT/usr/local/sbin/san-restore-boot" \
+    "$ROOT/usr/local/sbin/san-raid" \
+    "$ROOT/usr/local/sbin/san-lvm" \
+    "$ROOT/usr/local/sbin/san-nvme" \
+    "$ROOT/usr/local/sbin/san-perf" \
+    "$ROOT/usr/local/sbin/san-ab" \
+    "$ROOT/usr/local/sbin/san-ollama" \
+    "$ROOT/usr/local/sbin/san-ssh" \
     "$ROOT/usr/local/sbin/san-tui"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
-chown root:root \
-    "$ROOT/usr/local/sbin/san-live-boot" \
-    "$ROOT/usr/local/sbin/san-conf-bind" \
-    "$ROOT/usr/local/sbin/san-net-apply" \
-    "$ROOT/usr/local/sbin/san-restore-boot" \
-    "$ROOT/usr/local/sbin/san-tui" \
+chown -R root:root \
+    "$ROOT/usr/local/sbin" \
     "$ROOT/usr/lib/san-tui" \
-    "$ROOT/etc/systemd/system/san-live-boot.service" \
-    "$ROOT/etc/systemd/system/san-conf-bind.service" \
-    "$ROOT/etc/systemd/system/san-net-apply.service" \
-    "$ROOT/etc/systemd/system/san-inventory.service" \
-    "$ROOT/etc/systemd/system/san-restore.service" \
-    "$ROOT/etc/systemd/system/san-restore.service.d" \
-    "$ROOT/etc/systemd/system/san-restore.service.d/live.conf"
+    "$ROOT/usr/share/san" \
+    "$ROOT/etc/systemd/system" \
+    "$ROOT/etc/ssh/sshd_config.d" \
+    "$ROOT/etc/mdadm" \
+    "$ROOT/etc/lvm" \
+    "$ROOT/etc/profile.d/san-otp-lock.sh" \
+    "$ROOT/usr/lib/udev/rules.d/64-md-raid-assembly.rules"
 printf 'LANG=C.UTF-8\n' > "$ROOT/etc/default/locale"
+rm -f "$ROOT"/etc/ssh/ssh_host_*
+if [ -d "$ROOT/etc/ssh/sshd_config.d" ]; then
+    grep -q 'PermitRootLogin no' "$ROOT/etc/ssh/sshd_config.d/10-san.conf"
+    grep -q 'PasswordAuthentication no' "$ROOT/etc/ssh/sshd_config.d/10-san.conf"
+fi
+if [ -e "$ROOT/home/sanadmin/.ssh/authorized_keys" ]; then
+    die "an admin key is baked into the image"
+fi
+systemctl --root="$ROOT" disable ssh.service ssh.socket >/dev/null 2>&1 || true
+# The packaged LIO units call targetctl restore and load target_core_mod
+# even when nothing is configured. Exports stay on san-restore only.
+systemctl --root="$ROOT" disable \
+    rtslib-fb-targetctl.service target.service targetclid.service targetclid.socket \
+    >/dev/null 2>&1 || true
+systemctl --root="$ROOT" mask \
+    rtslib-fb-targetctl.service target.service targetclid.service targetclid.socket \
+    >/dev/null 2>&1 || true
 systemctl --root="$ROOT" enable \
     san-live-boot.service \
     san-inventory.service \
     san-restore.service \
     san-conf-bind.service \
-    san-net-apply.service
+    san-net-apply.service \
+    san-raid.service \
+    san-lvm.service \
+    san-nvme.service \
+    san-perf.service \
+    san-ab.service \
+    san-ollama.service \
+    san-ssh.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -125,6 +154,24 @@ find "$ROOT/lib/modules/$kver" -name 'iscsi_target_mod.ko*' | grep -q . \
     || die "kernel $kver has no iscsi_target_mod"
 grep -q '^CONFIG_CONFIGFS_FS=' "$ROOT/boot/config-$kver" \
     || die "kernel $kver has no configfs"
+nvme_note=$ROOT/usr/share/san/nvme-of.txt
+if find "$ROOT/lib/modules/$kver" -name 'nvmet.ko*' | grep -q . \
+    && find "$ROOT/lib/modules/$kver" -name 'nvmet-tcp.ko*' | grep -q .; then
+    printf '%s\n' "modules nvmet et nvmet-tcp présents dans $kver" > "$nvme_note"
+else
+    printf '%s\n' "NVMe-oF arrêté : modules absents de $kver" > "$nvme_note"
+    systemctl --root="$ROOT" disable san-nvme.service >/dev/null 2>&1 || true
+fi
+chroot "$ROOT" python3 - << 'PY'
+import inspect
+from pathlib import Path
+from rtslib_fb.tcm import FileIOStorageObject
+names = set(inspect.signature(FileIOStorageObject.__init__).parameters)
+text = "rtslib-fb n'expose pas de backstore io_uring sur ce noyau ; io_uring n'est pas activé."
+if "uring" in names or "io_uring" in names:
+    text = "rtslib-fb expose un paramètre io_uring."
+Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
+PY
 
 log "squashfs"
 mksquashfs "$ROOT" "$TREE/casper/filesystem.squashfs" -comp gzip -noappend -no-progress
@@ -135,6 +182,15 @@ chroot "$ROOT" dpkg-query -W -f='${Package}\t${Version}\n' | sort > "$TREE/caspe
 cp -a "$SCRIPT_DIR/grub.cfg" "$TREE/boot/grub/grub.cfg"
 printf '%s\n' "SAN appliance 24.04 LTS noble live" > "$TREE/.disk/info"
 
+if grep -q 'toram' "$SCRIPT_DIR/grub.cfg"; then
+    die "grub.cfg enables toram without a RAM measurement"
+fi
+log "md5sum.txt"
+(
+    cd "$TREE"
+    find . -type f ! -name md5sum.txt -print0 | sort -z | xargs -0 md5sum
+) > "$TREE/md5sum.txt"
+
 log "iso"
 rm -f "$ISO"
 grub-mkrescue -o "$ISO" "$TREE" -- -volid SANLIVE24
@@ -144,12 +200,23 @@ xorriso -indev "$ISO" -find /casper -name filesystem.squashfs | grep -q filesyst
 if ! xorriso -indev "$ISO" -report_el_torito as_mkisofs 2>/dev/null | grep -Eiq 'efi|uefi'; then
     die "ISO has no UEFI El Torito image"
 fi
+xorriso -indev "$ISO" -find /md5sum.txt | grep -q md5sum.txt || die "md5sum.txt missing from ISO"
+rm -rf "$WORK/cdrom"
+mkdir -p "$WORK/cdrom" "$ROOT/mnt/cdrom"
+xorriso -osirrox on -indev "$ISO" -extract / "$WORK/cdrom" >/dev/null
+mount --bind "$WORK/cdrom" "$ROOT/mnt/cdrom"
+if ! chroot "$ROOT" /usr/lib/casper/casper-md5check /mnt/cdrom /mnt/cdrom/md5sum.txt; then
+    umount "$ROOT/mnt/cdrom" || true
+    die "casper-md5check failed"
+fi
+umount "$ROOT/mnt/cdrom"
 
 manifest=$DIST/packages.manifest
 meta=$DIST/build-metadata.json
 cp -a "$TREE/casper/filesystem.manifest" "$manifest"
 sha=$(sha256sum "$ISO" | awk '{print $1}')
 printf '%s  %s\n' "$sha" "$(basename "$ISO")" > "$ISO.sha256"
+( cd "$DIST" && sha256sum -c "$(basename "$ISO.sha256")" )
 
 git_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty=false
@@ -169,7 +236,7 @@ doc = {
     "boot": "casper",
     "filesystem": "squashfs",
     "firmwares_booted_by_grub": ["bios", "uefi"],
-    "secure_boot": "not-tested",
+    "secure_boot": "unsupported",
     "bit_reproducible": False,
     "installer": False,
     "lio": "python3-rtslib-fb",

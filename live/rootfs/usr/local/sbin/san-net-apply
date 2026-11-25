@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Apply the admin and storage addresses saved in exports.json. No portal."""
+"""Pose les adresses admin et stockage si le support de conf a été accepté."""
 
 import json
 import subprocess
@@ -8,11 +8,25 @@ from pathlib import Path
 
 
 def main():
+    state_path = Path("/run/san/medium-state.json")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("san-net-apply: support non confirmé")
+        return
+    if not state.get("ok"):
+        print("san-net-apply: {}".format(state.get("reason") or "support refusé"))
+        return
     doc_path = Path("/var/lib/san/conf/exports.json")
     if not doc_path.is_file():
         return
     document = json.loads(doc_path.read_text(encoding="utf-8"))
     network = document.get("network") or {}
+    admin = (network.get("admin") or {}).get("iface")
+    storage = (network.get("storage") or {}).get("iface")
+    if not admin or not storage or admin == storage:
+        print("san-net-apply: interfaces admin et stockage non distinctes")
+        return
     for role in ("admin", "storage"):
         item = network.get(role) or {}
         iface = item.get("iface") or ""
@@ -27,10 +41,13 @@ def main():
             print("san-net-apply: interface absente {}".format(iface))
             continue
         subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-        subprocess.run(
-            ["ip", "addr", "replace", address, "dev", iface],
-            check=False,
-        )
+        mtu = item.get("mtu")
+        peer = item.get("peer_mtu")
+        if mtu == 9000 and peer == 9000:
+            subprocess.run(["ip", "link", "set", iface, "mtu", "9000"], check=False)
+        else:
+            subprocess.run(["ip", "link", "set", iface, "mtu", "1500"], check=False)
+        subprocess.run(["ip", "addr", "replace", address, "dev", iface], check=False)
         print("san-net-apply: {} {} dev {}".format(role, address, iface))
 
 

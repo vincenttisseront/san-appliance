@@ -1,0 +1,11 @@
+[Unit]
+Description=SSH admin par clé, sur l'adresse d'administration
+After=san-net-apply.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-ssh
+
+[Install]
+WantedBy=multi-user.target

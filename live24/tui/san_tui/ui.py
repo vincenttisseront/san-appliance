@@ -53,7 +53,7 @@ def screen_lines(name, snap, paths):
         except Exception as exc:
             return ["conf illisible : {}".format(exc.__class__.__name__)]
         if not document:
-            return ["Aucun export enregistré. Le boot n'en crée pas."]
+            return ["Aucun export enregistré. Cet écran n'exporte rien. Retour : san-tui rollback."]
         lines = []
         for target in document.get("targets") or []:
             acls = target.get("acls") or [{}]
@@ -71,7 +71,9 @@ def screen_lines(name, snap, paths):
     alerts = load_alerts(paths)
     if not alerts:
         return ["Aucune alerte."]
-    return ["{}  {}  {}".format(item["time"], item["level"], item["message"]) for item in alerts]
+    lines = ["Les alertes sont aussi écrites sur la console série.", ""]
+    lines.extend("{}  {}  {}".format(item["time"], item["level"], item["message"]) for item in alerts)
+    return lines
 
 
 def _network_lines(paths, role):

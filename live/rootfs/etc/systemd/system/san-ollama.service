@@ -1,0 +1,14 @@
+[Unit]
+Description=Conseiller Ollama, hors du chemin iSCSI
+After=san-restore.service
+ConditionPathExists=/etc/san/ollama.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/san/ollama.env
+ExecStart=/usr/local/sbin/san-ollama
+TimeoutStartSec=5
+
+[Install]
+WantedBy=multi-user.target

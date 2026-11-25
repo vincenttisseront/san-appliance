@@ -247,11 +247,26 @@ def boot_initiator(work):
     return start(args, work / "initiator.err")
 
 
-def login_shell(serial):
-    serial.wait_after("sanadmin@", 180, 0)
+def login_shell(serial, start=0):
+    prefix = b"san-otp: user=sanadmin password="
+    serial.wait_after(prefix.decode(), 220, start)
+    index = serial.buf.rfind(prefix, start)
+    # The password is written after this prefix. Wait for the end of the line
+    # so a split TCP segment is not read as an empty password.
+    serial.wait_after("\n", 30, index + len(prefix))
+    text = ANSI.sub("", serial.buf[start:].decode("utf-8", "replace"))
+    matches = list(re.finditer(r"san-otp: user=sanadmin password=([A-Za-z0-9]+)", text))
+    require(matches, "mot de passe série absent")
+    password = matches[-1].group(1)
+    if b"login:" not in serial.buf[start:]:
+        serial.wait_after("login:", 90, start)
+    serial.sock.sendall(b"sanadmin\n")
+    serial.wait_after("Password:", 40, len(serial.buf))
+    serial.sock.sendall(password.encode() + b"\n")
+    serial.wait_after("sanadmin@", 90, len(serial.buf))
     serial.quiet()
-    code, text = serial.run("sudo -n true", timeout=30)
-    require(code == 0, "sudo -n refusé\n" + text[-500:])
+    code, out = serial.run("sudo -n true", timeout=30)
+    require(code == 0, "sudo -n refusé\n" + out[-500:])
 
 
 def main():
@@ -269,7 +284,7 @@ def main():
     report = {
         "iso": str(ISO),
         "iso_sha256": iso_sha,
-        "secure_boot": "not-tested",
+        "secure_boot": "unsupported",
         "steps": [],
     }
     procs = []
@@ -334,8 +349,7 @@ def main():
             raise TestFail("reboot non envoyé : {}".format(exc)) from exc
         # The shell prints a prompt before the reboot actually happens.
         app.wait_after("san-live: mode=live", 220, start, poke=True)
-        app.wait_after("sanadmin@", 90, len(app.buf), poke=True)
-        app.quiet()
+        login_shell(app, start)
         read_back = init.san_result("sudo -n python3 /tmp/initiator-io.py read", 200)
         require(read_back["sha256"] == written["sha256"], "données différentes après reboot")
         require(read_back["identity"]["paths"] == before_id["paths"], "chemin de LUN différent après reboot")

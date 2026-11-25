@@ -1,0 +1,45 @@
+#!/bin/sh
+# SSH seulement sur l'adresse admin, par clé, jamais en root ni par mot de passe.
+set -eu
+
+if ! /usr/local/sbin/san-tui medium-status >/dev/null; then
+    printf '%s\n' "san-ssh: support non confirmé, ssh arrêté"
+    exit 0
+fi
+
+if ! python3 - << 'PY'
+import json
+import sys
+from pathlib import Path
+doc_path = Path("/var/lib/san/conf/exports.json")
+if not doc_path.is_file():
+    sys.exit(1)
+doc = json.loads(doc_path.read_text(encoding="utf-8"))
+network = doc.get("network") or {}
+admin = (network.get("admin") or {}).get("address", "").split("/", 1)[0]
+storage = (network.get("storage") or {}).get("address", "").split("/", 1)[0]
+if not admin or admin == storage:
+    sys.exit(1)
+Path("/etc/ssh/sshd_config.d/20-listen.conf").write_text(
+    "ListenAddress {}\n".format(admin), encoding="utf-8"
+)
+PY
+then
+    printf '%s\n' "san-ssh: adresse admin absente, ssh arrêté"
+    exit 0
+fi
+
+keys=/var/lib/san/conf/authorized_keys
+if [ -f "$keys" ]; then
+    install -d -m 0700 -o sanadmin -g sanadmin /home/sanadmin/.ssh
+    install -m 0600 -o sanadmin -g sanadmin "$keys" /home/sanadmin/.ssh/authorized_keys
+fi
+
+# Clés d'hôte générées au boot, jamais copiées dans l'ISO.
+ssh-keygen -A >/dev/null 2>&1 || true
+systemctl reset-failed ssh.service >/dev/null 2>&1 || true
+if ! systemctl start ssh.service; then
+    printf '%s\n' "san-ssh: sshd n'a pas démarré"
+    exit 0
+fi
+printf '%s\n' "san-ssh: écoute sur l'adresse admin"

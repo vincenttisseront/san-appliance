@@ -1,0 +1,3 @@
+Secure Boot n'est pas pris en charge. L'ISO n'est pas signée et la chaîne
+OVMF Secure Boot n'est pas une promesse. Le fichier de métadonnées du build
+ne doit pas dire le contraire.

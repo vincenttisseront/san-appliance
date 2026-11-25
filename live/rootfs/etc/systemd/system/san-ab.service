@@ -1,0 +1,13 @@
+[Unit]
+Description=Met à jour le slot inactif sans toucher à la partition data
+After=san-conf-bind.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-ab
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
