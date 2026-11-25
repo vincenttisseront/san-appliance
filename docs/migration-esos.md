@@ -48,6 +48,10 @@ Le média ESOS reste intact pendant l’essai. `install.sh` peut avoir conservé
 4. Seulement ensuite, relancer les exports ESOS.
 5. Si la nouvelle appliance a déjà écrit sur le volume, le retour ne restaure pas les blocs. Il évite seulement une double écriture de plus. La copie de secours, si elle existe, est le seul retour des données.
 
+## Ce que cette branche ne fait pas
+
+Aucun outil de ce dépôt n'importe `scst.conf`, un handler SCST, ni un binaire ESOS. LIO ne lit pas cette conf. Il n'y a pas de volume ouvert en écriture des deux côtés, même le temps d'une bascule. Le retour à la conf précédente de l'appliance 24.04 est `san-tui rollback` : il reprend la sauvegarde versionnée, il ne crée pas une cible.
+
 ## Un seul écrivain
 
 Le même volume ne doit jamais être ouvert en écriture par ESOS et par la nouvelle appliance en même temps. Les deux serveurs ne se partagent pas le disque « le temps de la bascule ».

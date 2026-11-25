@@ -1,0 +1,14 @@
+[Unit]
+Description=Active les groupes LVM enregistrés
+After=san-raid.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-lvm
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

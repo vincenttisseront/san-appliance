@@ -1,0 +1,300 @@
+{
+  "status": "measured",
+  "keep": [
+    {
+      "name": "scheduler-none",
+      "change": {
+        "scheduler": "none"
+      },
+      "p99_us": 831.488
+    }
+  ],
+  "current": "baseline",
+  "trials": {
+    "baseline": {
+      "workloads": {
+        "read": {
+          "iops": 11387.0,
+          "p99_us": 724.992,
+          "throughput_bps": 11940134912,
+          "cpu_per_gb": 4.183369816851865
+        },
+        "write": {
+          "iops": 8705.0,
+          "p99_us": 2801.664,
+          "throughput_bps": 9127854080,
+          "cpu_per_gb": 5.083341560166571
+        },
+        "randread-4k": {
+          "iops": 294783.108446,
+          "p99_us": 59.648,
+          "throughput_bps": 1207431612,
+          "cpu_per_gb": 38.88545219763639
+        },
+        "randwrite-4k": {
+          "iops": 465679.66017,
+          "p99_us": 35.072,
+          "throughput_bps": 1907423888,
+          "cpu_per_gb": 26.029963881361848
+        },
+        "randread-64k": {
+          "iops": 108729.135432,
+          "p99_us": 528.384,
+          "throughput_bps": 7125672619,
+          "cpu_per_gb": 5.4073119393968305
+        },
+        "randwrite-64k": {
+          "iops": 149940.029985,
+          "p99_us": 79.36,
+          "throughput_bps": 9826469805,
+          "cpu_per_gb": 5.07812581372071
+        },
+        "randread-1m": {
+          "iops": 11927.536232,
+          "p99_us": 684.032,
+          "throughput_bps": 12506928231,
+          "cpu_per_gb": 3.993788407625788
+        },
+        "randwrite-1m": {
+          "iops": 9792.603698,
+          "p99_us": 823.296,
+          "throughput_bps": 10268289215,
+          "cpu_per_gb": 4.864493387333742
+        }
+      },
+      "change": {}
+    },
+    "scheduler-none": {
+      "workloads": {
+        "read": {
+          "iops": 11922.0,
+          "p99_us": 667.648,
+          "throughput_bps": 12501123072,
+          "cpu_per_gb": 3.9976408289215186
+        },
+        "write": {
+          "iops": 9809.5,
+          "p99_us": 831.488,
+          "throughput_bps": 10286006272,
+          "cpu_per_gb": 4.858542633406631
+        },
+        "randread-4k": {
+          "iops": 508883.058471,
+          "p99_us": 33.536,
+          "throughput_bps": 2084385007,
+          "cpu_per_gb": 23.963914923522623
+        },
+        "randwrite-4k": {
+          "iops": 483312.343828,
+          "p99_us": 33.536,
+          "throughput_bps": 1979647360,
+          "cpu_per_gb": 25.219156947827955
+        },
+        "randread-64k": {
+          "iops": 177256.871564,
+          "p99_us": 69.12,
+          "throughput_bps": 11616706334,
+          "cpu_per_gb": 4.2998439960328145
+        },
+        "randwrite-64k": {
+          "iops": 155384.807596,
+          "p99_us": 77.312,
+          "throughput_bps": 10183298750,
+          "cpu_per_gb": 4.902638987999517
+        },
+        "randread-1m": {
+          "iops": 12201.89905,
+          "p99_us": 667.648,
+          "throughput_bps": 12794618498,
+          "cpu_per_gb": 3.903987054587348
+        },
+        "randwrite-1m": {
+          "iops": 9881.05947,
+          "p99_us": 815.104,
+          "throughput_bps": 10361041815,
+          "cpu_per_gb": 4.820946182723279
+        }
+      },
+      "change": {
+        "scheduler": "none"
+      }
+    },
+    "scheduler-mq": {
+      "workloads": {
+        "read": {
+          "iops": 12253.0,
+          "p99_us": 667.648,
+          "throughput_bps": 12848201728,
+          "cpu_per_gb": 3.8877035913239357
+        },
+        "write": {
+          "iops": 9961.0,
+          "p99_us": 823.296,
+          "throughput_bps": 10444865536,
+          "cpu_per_gb": 4.784647521574374
+        },
+        "randread-4k": {
+          "iops": 514551.724138,
+          "p99_us": 33.024,
+          "throughput_bps": 2107603862,
+          "cpu_per_gb": 23.6999114902323
+        },
+        "randwrite-4k": {
+          "iops": 478750.624688,
+          "p99_us": 33.536,
+          "throughput_bps": 1960962558,
+          "cpu_per_gb": 25.45945472504645
+        },
+        "randread-64k": {
+          "iops": 183623.188406,
+          "p99_us": 68.096,
+          "throughput_bps": 12033929275,
+          "cpu_per_gb": 4.148689620727077
+        },
+        "randwrite-64k": {
+          "iops": 154338.330835,
+          "p99_us": 77.312,
+          "throughput_bps": 10114716849,
+          "cpu_per_gb": 4.938351288558709
+        },
+        "randread-1m": {
+          "iops": 11101.449275,
+          "p99_us": 716.8,
+          "throughput_bps": 11640713275,
+          "cpu_per_gb": 4.28882975641417
+        },
+        "randwrite-1m": {
+          "iops": 9290.354823,
+          "p99_us": 847.872,
+          "throughput_bps": 9741643098,
+          "cpu_per_gb": 5.1249093173203
+        }
+      },
+      "change": {
+        "scheduler": "mq-deadline"
+      }
+    },
+    "mtu-9000": {
+      "workloads": {
+        "read": {
+          "iops": 11928.5,
+          "p99_us": 684.032,
+          "throughput_bps": 12507938816,
+          "cpu_per_gb": 3.993463730099526
+        },
+        "write": {
+          "iops": 9719.0,
+          "p99_us": 831.488,
+          "throughput_bps": 10191110144,
+          "cpu_per_gb": 4.901330600318159
+        },
+        "randread-4k": {
+          "iops": 515852.073963,
+          "p99_us": 33.024,
+          "throughput_bps": 2112930094,
+          "cpu_per_gb": 23.628343218984327
+        },
+        "randwrite-4k": {
+          "iops": 483225.887056,
+          "p99_us": 33.536,
+          "throughput_bps": 1979293233,
+          "cpu_per_gb": 25.223669054796858
+        },
+        "randread-64k": {
+          "iops": 182586.206897,
+          "p99_us": 68.096,
+          "throughput_bps": 11965969655,
+          "cpu_per_gb": 4.1722517205012934
+        },
+        "randwrite-64k": {
+          "iops": 157860.069965,
+          "p99_us": 75.264,
+          "throughput_bps": 10345517545,
+          "cpu_per_gb": 4.828180394952718
+        },
+        "randread-1m": {
+          "iops": 10906.046977,
+          "p99_us": 724.992,
+          "throughput_bps": 11435819114,
+          "cpu_per_gb": 4.367857211419359
+        },
+        "randwrite-1m": {
+          "iops": 8951.524238,
+          "p99_us": 880.64,
+          "throughput_bps": 9386353479,
+          "cpu_per_gb": 5.321558057436617
+        }
+      },
+      "change": {
+        "mtu": 9000
+      }
+    },
+    "burst-64k": {
+      "workloads": {
+        "read": {
+          "iops": 11534.5,
+          "p99_us": 708.608,
+          "throughput_bps": 12094799872,
+          "cpu_per_gb": 4.129874039142762
+        },
+        "write": {
+          "iops": 9666.0,
+          "p99_us": 823.296,
+          "throughput_bps": 10135535616,
+          "cpu_per_gb": 4.930671835547521
+        },
+        "randread-4k": {
+          "iops": 517596.701649,
+          "p99_us": 33.536,
+          "throughput_bps": 2120076089,
+          "cpu_per_gb": 23.548700783809387
+        },
+        "randwrite-4k": {
+          "iops": 482925.537231,
+          "p99_us": 34.048,
+          "throughput_bps": 1978063000,
+          "cpu_per_gb": 25.239356617380743
+        },
+        "randread-64k": {
+          "iops": 176952.023988,
+          "p99_us": 69.12,
+          "throughput_bps": 11596727844,
+          "cpu_per_gb": 4.3050969335935845
+        },
+        "randwrite-64k": {
+          "iops": 155520.73963,
+          "p99_us": 77.312,
+          "throughput_bps": 10192207192,
+          "cpu_per_gb": 4.898353863770377
+        },
+        "randread-1m": {
+          "iops": 11726.636682,
+          "p99_us": 692.224,
+          "throughput_bps": 12296269785,
+          "cpu_per_gb": 4.062209585544628
+        },
+        "randwrite-1m": {
+          "iops": 9580.209895,
+          "p99_us": 839.68,
+          "throughput_bps": 10045578170,
+          "cpu_per_gb": 4.972339484862007
+        }
+      },
+      "change": {
+        "burst": "64k"
+      }
+    }
+  },
+  "probes": {
+    "io_uring": false,
+    "governor": "",
+    "write_cache": "write through",
+    "tx_checksumming": "off",
+    "tcp_segmentation_offload": "off",
+    "generic_receive_offload": "on",
+    "scheduler": "[none] mq-deadline",
+    "encryption": "hors du premier banc",
+    "hugepages": "non activ\u00e9es : pas de gain mesur\u00e9 dans ce banc",
+    "note": "Le cache d'\u00e9criture du disque n'a pas \u00e9t\u00e9 forc\u00e9. io_uring n'est appliqu\u00e9 que si rtslib l'expose."
+  }
+}

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 
 from san_tui.alerts import load_alerts
@@ -56,6 +57,17 @@ def main(argv=None):
     exp.add_argument("--chap-secret-file", required=True, help="fichier 0600, jamais en argument")
     exp.add_argument("--confirm", required=True)
 
+    sub.add_parser("medium-bind", help="monter le support seulement si l'identifiant colle")
+    sub.add_parser("medium-status", help="code 0 si le support de conf est accepté")
+    sub.add_parser("raid-assemble", help="assembler les arrays explicitement enregistrés")
+    sub.add_parser("lvm-activate", help="activer les groupes explicitement enregistrés")
+    sub.add_parser("nvme-restore", help="exporter le NVMe-oF enregistré")
+    sub.add_parser("perf-apply", help="appliquer le seul réglage mesuré, s'il existe")
+    sub.add_parser("ab-apply", help="écrire le slot inactif si une mise à jour est en attente")
+    sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
+    sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
+    sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
+
     args = parser.parse_args(argv)
     paths = SanPaths(args.root)
     probe = CommandProbe()
@@ -68,8 +80,53 @@ def main(argv=None):
         if args.command == "alerts":
             return _print(load_alerts(paths))
         if args.command == "restore":
+            from san_tui.runtime import diagnostic
+            if diagnostic(paths):
+                from san_tui.alerts import add_alert
+                add_alert(paths, "info", "diagnostic : pas d'export iSCSI")
+                return _print({"exported": [], "skipped": [{"iqn": "*", "reason": "diagnostic"}]})
             backend = RecordingBackend() if args.dry_run else RtslibBackend()
             return _print(restore(paths, probe, backend))
+        if args.command == "medium-bind":
+            from san_tui.runtime import bind_medium
+            return _print(bind_medium(paths, probe))
+        if args.command == "medium-status":
+            from san_tui.runtime import medium_ok
+            state = paths.run / "medium-state.json"
+            if state.is_file():
+                print(state.read_text(encoding="utf-8"), end="")
+            return 0 if medium_ok(paths) else 2
+        if args.command == "raid-assemble":
+            from san_tui.raid import RecordingMd
+            from san_tui.runtime import MdadmBackend, assemble_raid
+            backend = RecordingMd() if os.environ.get("SAN_DRY_RUN") == "1" else MdadmBackend()
+            return _print(assemble_raid(paths, probe, backend))
+        if args.command == "lvm-activate":
+            from san_tui.lvm import RecordingLvm
+            from san_tui.runtime import LvmBackend, activate_lvm
+            backend = RecordingLvm() if os.environ.get("SAN_DRY_RUN") == "1" else LvmBackend()
+            return _print(activate_lvm(paths, probe, backend))
+        if args.command == "nvme-restore":
+            from san_tui.nvme import RecordingNvme
+            from san_tui.runtime import ConfigfsNvme, restore_nvme
+            backend = RecordingNvme() if os.environ.get("SAN_DRY_RUN") == "1" else ConfigfsNvme()
+            return _print(restore_nvme(paths, probe, backend))
+        if args.command == "perf-apply":
+            from san_tui.runtime import MeasuredWriter, apply_measured
+            return _print(apply_measured(paths, MeasuredWriter()))
+        if args.command == "ab-apply":
+            from san_tui.runtime import run_ab
+            return _print(run_ab(paths, probe))
+        if args.command == "ollama-advise":
+            from san_tui.runtime import advise
+            return _print(advise(paths))
+        if args.command == "rollback":
+            from san_tui.runtime import rollback
+            backend = RecordingBackend() if os.environ.get("SAN_DRY_RUN") == "1" else RtslibBackend()
+            return _print(rollback(paths, probe, backend))
+        if args.command == "toram-measure":
+            from san_tui.runtime import measure_toram
+            return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
         if args.command == "persist-select":
             volume = _need_volume(probe, args.id)
             choice = select_support(paths, args.role, volume, args.confirm)
@@ -137,6 +194,25 @@ def _network_plan(paths):
     if not isinstance(plan, dict):
         raise ExportError("réseau admin et stockage non enregistrés")
     return plan
+
+
+def _mem_kib():
+    try:
+        for line in open("/proc/meminfo", encoding="utf-8"):
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1])
+    except OSError:
+        return 0
+    return 0
+
+
+def _squash_bytes():
+    for candidate in ("/cdrom/casper/filesystem.size", "/run/live/medium/casper/filesystem.size"):
+        try:
+            return int(open(candidate, encoding="utf-8").read().strip())
+        except (OSError, ValueError):
+            continue
+    return 0
 
 
 def _print(payload):

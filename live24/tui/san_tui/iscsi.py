@@ -1,8 +1,12 @@
 """iSCSI LIO : cible, portail, LUN, ACL et CHAP. Pas de partage automatique."""
 
+import json
 import os
+import subprocess
+from pathlib import Path
 
 from san_tui.alerts import add_alert
+from san_tui.identity import identity_problem
 from san_tui.persist import PersistError, load_choice, load_exports, save_exports
 from san_tui.safety import SafetyError, assert_usable, check_portal, describe_action, require_confirmation
 
@@ -28,6 +32,7 @@ def plan_export(volume, portal, iqn, initiator, chap_user, lun=0):
             "wwn": volume.get("wwn") or "",
             "serial": volume.get("serial") or "",
             "size": volume.get("size"),
+            "block_size": volume.get("block_size"),
             "kind": volume.get("kind") or "block",
         },
         "portal": {"address": portal["address"], "port": int(portal.get("port") or 3260)},
@@ -95,8 +100,12 @@ def restore(paths, probe, backend):
     if not choice or not choice.get("conf"):
         add_alert(paths, "info", "aucun support de conf choisi : rien n'est exporté")
         return {"exported": [], "skipped": []}
+    if choice.get("version") != 2:
+        message = "version de support refusée"
+        add_alert(paths, "error", message)
+        return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     conf_volume = probe.get_volume(choice["conf"]["id"])
-    mismatch = _identity_problem(choice["conf"], conf_volume, "support de conf")
+    mismatch = identity_problem(choice["conf"], conf_volume, "support de conf")
     if mismatch:
         add_alert(paths, "error", mismatch)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": mismatch}]}
@@ -107,9 +116,10 @@ def restore(paths, probe, backend):
         add_alert(paths, "error", message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     plan = document.get("network") or {}
+    claimed = set()
     for target in document["targets"]:
         iqn = target.get("iqn") or "?"
-        reason = _target_problem(target, plan, probe, secrets)
+        reason = _target_problem(target, plan, probe, secrets, claimed)
         if reason:
             add_alert(paths, "error", "{} : {}".format(iqn, reason), secrets.values())
             skipped.append({"iqn": iqn, "reason": reason})
@@ -118,15 +128,18 @@ def restore(paths, probe, backend):
         try:
             backend.apply(target, secrets[ref], probe)
         except Exception as exc:
-            message = "échec LIO : {}".format(exc.__class__.__name__)
+            detail = " ".join(str(exc).split())[:180]
+            message = "échec LIO : {} {}".format(exc.__class__.__name__, detail).strip()
             add_alert(paths, "error", "{} : {}".format(iqn, message), secrets.values())
             skipped.append({"iqn": iqn, "reason": message})
             continue
         exported.append(iqn)
+        portal = target.get("portal") or {}
+        claimed.add((portal.get("address"), int(portal.get("port") or 3260)))
     return {"exported": exported, "skipped": skipped}
 
 
-def _target_problem(target, plan, probe, secrets):
+def _target_problem(target, plan, probe, secrets, claimed):
     portal = target.get("portal") or {}
     reason = check_portal(portal, plan)
     if reason:
@@ -136,7 +149,7 @@ def _target_problem(target, plan, probe, secrets):
         return "réseau stockage absent : {}".format(portal.get("address"))
     volume = target.get("volume") or {}
     current = probe.get_volume(volume.get("id"))
-    reason = _identity_problem(volume, current, "volume")
+    reason = identity_problem(volume, current, "volume")
     if reason:
         return reason
     try:
@@ -155,20 +168,10 @@ def _target_problem(target, plan, probe, secrets):
         return str(exc)
     if acls[0].get("initiator", "") == "":
         return "ACL vide"
-    return None
-
-
-def _identity_problem(expected, current, label):
-    if current is None:
-        return "{} absent : {}".format(label, expected.get("id"))
-    if current.get("id") != expected.get("id"):
-        return "{} : identifiant by-id différent".format(label)
-    if expected.get("wwn") and current.get("wwn") != expected.get("wwn"):
-        return "{} : WWN différent".format(label)
-    if expected.get("serial") and current.get("serial") != expected.get("serial"):
-        return "{} : série différente".format(label)
-    if expected.get("size") is not None and current.get("size") != expected.get("size"):
-        return "{} : taille différente".format(label)
+    portal = target.get("portal") or {}
+    key = (portal.get("address"), int(portal.get("port") or 3260))
+    if key in claimed:
+        return "un seul portail par interface de stockage"
     return None
 
 
@@ -192,6 +195,7 @@ class RtslibBackend:
     """Applique une cible via python3-rtslib-fb. Le portail est une adresse précise."""
 
     def apply(self, target, secret, probe):
+        _prepare_lio()
         try:
             from rtslib_fb import (
                 BlockStorageObject,
@@ -206,8 +210,13 @@ class RtslibBackend:
         except ImportError as exc:
             raise ExportError("python3-rtslib-fb absent") from exc
         volume = probe.get_volume(target["volume"]["id"])
-        if volume is None:
-            raise ExportError("volume absent")
+        reason = identity_problem(target["volume"], volume, "volume")
+        if reason:
+            raise ExportError(reason)
+        try:
+            assert_usable(volume)
+        except SafetyError as exc:
+            raise ExportError(str(exc)) from exc
         name = _safe_name(target["iqn"])
         storage = None
         tgt = None
@@ -238,6 +247,7 @@ class RtslibBackend:
             node.chap_userid = acl["chap_user"]
             node.chap_password = secret
             MappedLUN(node, int(target["lun"]), tpg_lun=lun, write_protect=False)
+            _apply_measured_iscsi(tpg)
             tpg.enable = True
         except Exception:
             if tgt is not None:
@@ -254,6 +264,57 @@ class RtslibBackend:
         # Le secret ne doit pas rester dans l'environnement du processus.
         os.environ.pop("SAN_CHAP_SECRET", None)
         return name
+
+
+def _prepare_lio():
+    """Charge LIO avant que rtslib ne crée un répertoire configfs vide."""
+    subprocess.run(["modprobe", "configfs"], check=False, capture_output=True)
+    if not os.path.ismount("/sys/kernel/config"):
+        subprocess.run(
+            ["mount", "-t", "configfs", "none", "/sys/kernel/config"],
+            check=False,
+            capture_output=True,
+        )
+    target = Path("/sys/kernel/config/target")
+    if target.is_dir() and not (target / "core").is_dir():
+        try:
+            target.rmdir()
+        except OSError:
+            pass
+    subprocess.run(["modprobe", "target_core_mod"], check=False, capture_output=True)
+    subprocess.run(["modprobe", "iscsi_target_mod"], check=False, capture_output=True)
+    os.makedirs("/etc/rtslib-fb-target", exist_ok=True)
+
+
+def _apply_measured_iscsi(tpg):
+    """Pose un réglage iSCSI seulement s'il est le réglage unique du banc."""
+    try:
+        change = _measured_change()
+        if change.get("burst") == "64k":
+            tpg.set_parameter("ImmediateData", "Yes")
+            tpg.set_parameter("FirstBurstLength", "65536")
+        elif change.get("digest") == "crc32c":
+            tpg.set_parameter("HeaderDigest", "CRC32C")
+            tpg.set_parameter("DataDigest", "CRC32C")
+    except Exception:
+        return
+
+
+def _measured_change():
+    path = Path("/usr/share/san/perf-results.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if data.get("status") != "measured":
+        return {}
+    keep = data.get("keep") or []
+    if len(keep) != 1 or not isinstance(keep[0], dict):
+        return {}
+    change = keep[0].get("change") or {}
+    if not isinstance(change, dict) or len(change) != 1:
+        return {}
+    return change
 
 
 def _safe_name(iqn):

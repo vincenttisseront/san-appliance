@@ -1,7 +1,19 @@
 #!/bin/sh
-# Retry a transient LIO failure. A missing disk is not retried: restore
-# reports it once and leaves that target down.
+# Rétablit iSCSI seulement hors diagnostic et seulement si le support est accepté.
 set -eu
+
+mode=live
+if [ -f /run/san-live/mode ]; then
+    mode=$(cat /run/san-live/mode)
+fi
+if [ "$mode" = diagnostic ]; then
+    printf '%s\n' "san-restore: diagnostic, pas d'export"
+    exit 0
+fi
+if ! /usr/local/sbin/san-tui medium-status >/dev/null; then
+    printf '%s\n' "san-restore: support refusé, pas d'export"
+    exit 0
+fi
 
 attempt=0
 while [ "$attempt" -lt 8 ]; do

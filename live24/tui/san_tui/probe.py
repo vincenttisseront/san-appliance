@@ -124,14 +124,16 @@ class SysfsProbe:
         disk_mounted = name in mounted or any(
             disk_of(dev) == name and dev in mounted for dev in mounted
         )
+        serial = _serial(block) or _serial(identity)
         return {
             "id": "/dev/disk/by-id/" + id_name,
             "kernel": name,
             "path": str(target),
             "wwn": _first(identity, ("device/wwid", "wwid", "device/eui")),
-            "serial": _serial(identity),
+            "serial": serial,
             "model": _read(identity / "device" / "model"),
             "size": _size(block),
+            "block_size": _block_size(block),
             "mounts": own_mounts if not disk_mounted or own_mounts else own_mounts,
             "holders": holders,
             "active": bool(holders) or (disk_mounted and name == parent and not own_mounts),
@@ -166,6 +168,13 @@ def _first(block, relatives):
 def _serial(block):
     value = _first(block, ("device/serial", "device/vpd_pg80", "serial"))
     return value.split()[0] if value else ""
+
+
+def _block_size(block):
+    raw = _read(block / "queue" / "logical_block_size")
+    if raw.isdigit():
+        return int(raw)
+    return None
 
 
 def _size(block):

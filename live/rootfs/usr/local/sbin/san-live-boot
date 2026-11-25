@@ -1,5 +1,6 @@
 #!/bin/sh
-# Record the boot mode. Diagnostic mode must not export a LUN.
+# Mode de boot, mot de passe à usage unique sur la série, mesure RAM.
+# Le mot de passe n'est pas écrit sur la sortie du service : elle va au journal.
 set -eu
 
 mode=live
@@ -8,14 +9,38 @@ case " $cmdline " in
     *" san.mode=diagnostic "*) mode=diagnostic ;;
 esac
 
-mkdir -p /run/san-live
+mkdir -p /run/san-live /run/san /etc/san
 printf '%s\n' "$mode" > /run/san-live/mode
+printf '%s\n' "$mode" > /run/san/mode
 
-# casper gives the console user an empty password. Lock it so it is not a
-# credential. Local autologin does not need it. Nothing here is written to a
-# disk other than the live overlay in RAM.
+if [ "$mode" = diagnostic ]; then
+    systemctl mask --runtime \
+        san-restore.service san-raid.service san-lvm.service \
+        san-nvme.service san-ab.service san-perf.service \
+        >/dev/null 2>&1 || true
+fi
+
 if id sanadmin >/dev/null 2>&1; then
-    passwd -l sanadmin >/dev/null 2>&1 || true
+    otp=$(/usr/bin/python3 -c 'import secrets; print(secrets.token_hex(6))' 2>/dev/null || true)
+    if [ -z "$otp" ]; then
+        otp=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 12 || true)
+    fi
+    if [ -z "$otp" ]; then
+        printf 'san-otp: generation failed\n' > /dev/ttyS0
+        exit 1
+    fi
+    printf '%s:%s\n' sanadmin "$otp" | chpasswd
+    : > /run/san/otp-pending
+    chmod 0600 /run/san/otp-pending
+    if [ -c /dev/ttyS0 ]; then
+        printf 'san-otp: user=sanadmin password=%s\n' "$otp" > /dev/ttyS0
+    fi
+fi
+
+/usr/local/sbin/san-tui toram-measure >/dev/null 2>&1 || true
+
+if [ ! -f /etc/san/chosen.json ] && [ -f /usr/share/san/first-boot.txt ] && [ -c /dev/ttyS0 ]; then
+    cat /usr/share/san/first-boot.txt > /dev/ttyS0 || true
 fi
 
 msg="san-live: mode=$mode"
@@ -24,14 +49,11 @@ if awk '{print $1}' /proc/modules | grep -qx target_core_mod; then
 else
     msg="$msg export-module=absent"
 fi
-
 if [ "$mode" = diagnostic ]; then
-    # Units that a later image layer may add. Missing units are ignored.
-    systemctl mask --runtime \
-        san-iscsi.service san-iscsi-restore.service san-target.service \
-        san-restore.service >/dev/null 2>&1 || true
-    msg="$msg lun-export=disabled"
+    msg="$msg lun-export=disabled format=disabled"
 fi
-
 printf '%s\n' "$msg"
+if [ -c /dev/ttyS0 ]; then
+    printf '%s\n' "$msg" > /dev/ttyS0
+fi
 logger -t san-live -- "$msg" || true

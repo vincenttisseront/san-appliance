@@ -3,9 +3,12 @@
 Image live Noble, à côté de l'image installable 26.04 (`image/`). Elle ne partitionne rien et n'installe pas le système.
 
 ```bash
+sudo apt-get install -y mmdebstrap squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin mtools
 make doctor
 make iso
 ```
+
+`mtools` fournit `mformat`, exigé par `make doctor` : `grub-mkrescue` s'en sert pour l'image UEFI.
 
 `make doctor` vérifie l'hôte Ubuntu 24.04 amd64, les outils, le menu GRUB, et les signatures APT (`InRelease` de noble, noble-updates, noble-security) avec le trousseau Ubuntu. `make iso` produit dans `dist/` :
 
@@ -14,10 +17,10 @@ make iso
 - `packages.manifest`
 - `build-metadata.json`
 
-La première entrée GRUB est « SAN appliance live » (`boot=casper`). Il n'y a pas d'entrée d'installation. La seconde est le mode diagnostic (`san.mode=diagnostic`) : elle n'exporte pas de LUN. `nopersistent` et `systemd.gpt_auto=0` empêchent casper et systemd d'écrire un volume de persistance ou de monter seuls un disque. Le démarrage BIOS et UEFI passe par GRUB (El Torito). Secure Boot n'est pas testé et n'est pas annoncé. La construction n'est pas reproductible bit à bit.
+La première entrée GRUB est « SAN appliance live » (`boot=casper`). Il n'y a pas d'entrée d'installation. La seconde est le mode diagnostic (`san.mode=diagnostic`) : elle n'exporte pas de LUN et ne formate rien. `nopersistent`, `raid=noautodetect` et `systemd.gpt_auto=0` empêchent casper, mdadm et systemd d'écrire un volume ou d'assembler un array tout seuls. `toram` n'est pas dans le menu : le boot mesure la RAM et laisse le paramètre absent. Le démarrage BIOS et UEFI passe par GRUB (El Torito). Secure Boot n'est pas pris en charge : l'ISO n'est pas signée. `md5sum.txt` est à la racine pour `casper-md5check`. La construction n'est pas reproductible bit à bit.
 
-Le compte console `sanadmin` est ouvert en local par autologin. Le mot de passe vide posé par casper est verrouillé au boot. OpenSSH n'est pas installé. Aucun secret n'est dans l'ISO.
+Le compte `sanadmin` n'est plus en autologin. Un mot de passe à usage unique est écrit sur la console série, puis verrouillé après la première session. Il n'est pas un secret de l'ISO. SSH est installé, refuse root et refuse les mots de passe, et n'écoute que l'adresse d'administration une fois le support de conf accepté. Aucune clé n'est dans l'image.
 
 L'image embarque `python3-rtslib-fb`, `targetcli-fb`, les modules `target_core_mod` et `iscsi_target_mod`, et la TUI `san-tui` (`live24/tui`). Le boot n'exporte rien tant que `/etc/san/chosen.json` est absent. Le mode diagnostic masque `san-restore.service`.
 
-Le support de conf choisi par l'opérateur est un système de fichiers étiqueté `SANCONF`. Au boot, `san-conf-bind` ne monte que cette étiquette, et seulement si elle contient déjà `chosen.json`. Il ne formate pas et ne touche pas aux autres disques. `san-net-apply` repose ensuite les adresses enregistrées dans `exports.json`, puis `san-restore` rétablit les cibles dont le volume, le WWN, la série et la taille collent encore. `open-iscsi` est présent pour une VM d'essai ; il n'a aucun nœud configuré dans l'image.
+Le support de conf est un système de fichiers étiqueté `SANCONF`, choisi explicitement. Au boot, `san-conf-bind` le monte seulement si `chosen.json` est en version 2 et si l'identifiant by-id, le WWN, la série, la taille et la taille de bloc collent encore au disque. Sinon il ne monte pas, n'applique pas le réseau, n'exporte rien, et enregistre la cause. `san-restore` rétablit ensuite les cibles iSCSI dont le volume colle encore, avec une ACL et un CHAP, un seul portail par interface de stockage. RAID et LVM ne portent que les membres enregistrés. NVMe-oF TCP suit les mêmes gardes si `nvmet` et `nvmet-tcp` sont dans le noyau de l'image. Le guide du premier boot est `docs/first-boot.md`. Le conseiller Ollama est décrit par `SAN_OLLAMA_ENDPOINT` dans `/etc/san/ollama.env` ; sans ce fichier, l'unité ne démarre pas. Aucun modèle et aucune clé ne sont dans l'ISO.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Applique le réglage mesuré, s'il en existe un
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-perf
+
+[Install]
+WantedBy=multi-user.target

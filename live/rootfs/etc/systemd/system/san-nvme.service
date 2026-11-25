@@ -1,0 +1,13 @@
+[Unit]
+Description=Exporte le NVMe-oF enregistré
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-nvme
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

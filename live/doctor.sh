@@ -17,8 +17,13 @@ ok() { printf 'doctor: %s\n' "$*"; }
 [ "$(uname -m)" = "x86_64" ] || fail "build host is $(uname -m), want x86_64"
 ok "host Ubuntu ${VERSION_ID} amd64"
 
-for cmd in mmdebstrap mksquashfs xorriso grub-mkrescue gpgv curl; do
-    command -v "$cmd" >/dev/null 2>&1 || fail "missing host command: $cmd"
+for cmd in mmdebstrap mksquashfs xorriso grub-mkrescue gpgv curl mformat; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        if [ "$cmd" = "mformat" ]; then
+            fail "missing mformat from the mtools package, required by grub-mkrescue"
+        fi
+        fail "missing host command: $cmd"
+    fi
 done
 [ -f "$KEYRING" ] || fail "Ubuntu archive keyring missing: $KEYRING"
 ok "host tools and Ubuntu keyring present"
