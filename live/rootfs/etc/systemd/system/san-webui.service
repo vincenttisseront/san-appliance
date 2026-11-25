@@ -1,8 +1,8 @@
 [Unit]
 Description=SAN WebUI (loopback only)
-After=network-online.target san-webui-secrets.service
+After=network-online.target san-webui-secrets.service san-release.service
 Requires=san-webui-secrets.service
-Wants=network-online.target
+Wants=network-online.target san-release.service
 
 [Service]
 Type=simple
@@ -20,7 +20,9 @@ Environment=NUXT_COOKIE_SECURE=false
 Environment=DB_PATH=/var/lib/san/webui/esos-webui.db
 Environment=AUTH_HEADER_ENABLED=false
 Environment=AUTH_HEADER_TRUST_WITHOUT_TOKEN=false
-ExecStart=/usr/bin/node /usr/lib/san-webui/scripts/serve-local.mjs
+# Nitro stays on 127.0.0.1:3010. front.mjs owns 127.0.0.1:3000 and starts
+# /usr/lib/san-webui/scripts/serve-local.mjs
+ExecStart=/usr/bin/node /usr/lib/san-webui/front.mjs
 ExecStartPost=/usr/local/sbin/san-webui-listen-check
 Restart=on-failure
 NoNewPrivileges=yes

@@ -18,6 +18,7 @@ from san_tui.iscsi import (
 from san_tui.paths import SanPaths
 from san_tui.persist import PersistError, select_support
 from san_tui.probe import CommandProbe, inventory
+from san_tui.release import ReleaseError
 from san_tui.safety import SafetyError, check_portal
 
 
@@ -64,6 +65,9 @@ def main(argv=None):
     sub.add_parser("nvme-restore", help="exporter le NVMe-oF enregistré")
     sub.add_parser("perf-apply", help="appliquer le seul réglage mesuré, s'il existe")
     sub.add_parser("ab-apply", help="écrire le slot inactif si une mise à jour est en attente")
+    release_p = sub.add_parser("release-apply", help="appliquer une release GitHub sur le slot inactif")
+    release_p.add_argument("--tag", default="")
+    release_p.add_argument("--api", default="")
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
@@ -117,6 +121,18 @@ def main(argv=None):
         if args.command == "ab-apply":
             from san_tui.runtime import run_ab
             return _print(run_ab(paths, probe))
+        if args.command == "release-apply":
+            from san_tui.release import fetch_and_apply, read_token
+            token = ""
+            token_file = os.environ.get("SAN_GITHUB_TOKEN_FILE", "")
+            if token_file:
+                token = read_token(token_file)
+            return _print(fetch_and_apply(
+                paths,
+                tag=args.tag,
+                api=args.api,
+                token=token,
+            ))
         if args.command == "ollama-advise":
             from san_tui.runtime import advise
             return _print(advise(paths))
@@ -161,7 +177,7 @@ def main(argv=None):
             print(json.dumps(impact_for(volume), indent=2, ensure_ascii=False))
             saved = add_export(paths, plan, drafted, secret, args.confirm)
             return _print(saved)
-    except (SafetyError, ExportError, PersistError) as exc:
+    except (SafetyError, ExportError, PersistError, ReleaseError) as exc:
         print("refus : {}".format(exc), file=sys.stderr)
         return 2
     parser.error("commande inconnue")

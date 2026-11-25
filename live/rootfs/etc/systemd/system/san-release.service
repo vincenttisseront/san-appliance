@@ -1,0 +1,13 @@
+[Unit]
+Description=Apply a GitHub release on the inactive application slot
+After=san-conf-bind.service
+Before=san-webui.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/san-release-listen
+Restart=on-failure
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

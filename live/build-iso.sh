@@ -13,7 +13,7 @@ WORK=$SCRIPT_DIR/work
 ROOT=$WORK/rootfs
 TREE=$WORK/iso
 DIST=$REPO_ROOT/dist
-ISO=$DIST/san-appliance-live-24.04-amd64.iso
+ISO=${SAN_ISO:-$DIST/san-appliance-live-24.04-amd64.iso}
 KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 log() { printf 'build-iso: %s\n' "$*"; }
@@ -66,6 +66,7 @@ install_sh=$REPO_ROOT/live24/tui/install.sh
 [ -x "$install_sh" ] || die "missing $install_sh"
 "$install_sh" "$ROOT"
 "$SCRIPT_DIR/install-webui.sh" "$ROOT"
+install -m 0644 "$SCRIPT_DIR/webui/front.mjs" "$ROOT/usr/lib/san-webui/front.mjs"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
 chmod 0755 \
@@ -82,7 +83,8 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-ssh" \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
-    "$ROOT/usr/local/sbin/san-webui-secrets"
+    "$ROOT/usr/local/sbin/san-webui-secrets" \
+    "$ROOT/usr/local/sbin/san-release-listen"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -130,7 +132,8 @@ systemctl --root="$ROOT" enable \
     san-ollama.service \
     san-ssh.service \
     san-webui-secrets.service \
-    san-webui.service
+    san-webui.service \
+    san-release.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -181,6 +184,7 @@ Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
+[ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
 if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then
     die "san-webui.service must not launch server/index.mjs"
@@ -230,7 +234,10 @@ meta=$DIST/build-metadata.json
 cp -a "$TREE/casper/filesystem.manifest" "$manifest"
 sha=$(sha256sum "$ISO" | awk '{print $1}')
 printf '%s  %s\n' "$sha" "$(basename "$ISO")" > "$ISO.sha256"
-( cd "$DIST" && sha256sum -c "$(basename "$ISO.sha256")" )
+(
+    cd "$(dirname "$ISO")"
+    sha256sum -c "$(basename "$ISO.sha256")"
+)
 
 git_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty=false
