@@ -55,6 +55,8 @@ def save_exports(paths, document, secrets):
     secret_path = paths.conf / "secrets.json"
     _write_json(public_path, document, 0o644)
     _write_json(secret_path, secrets, 0o600)
+    from san_tui.configio import write_builtin_export
+    write_builtin_export(paths, document, secrets)
     return backup_dir
 
 

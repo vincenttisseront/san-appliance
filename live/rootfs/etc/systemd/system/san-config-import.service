@@ -1,0 +1,12 @@
+[Unit]
+Description=Import a dropped SAN config and reattach LUNs by WWN
+ConditionPathExists=/var/lib/san/conf/incoming/san-config.json
+After=san-factory.service san-conf-bind.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-tui config-import
+
+[Install]
+WantedBy=multi-user.target
