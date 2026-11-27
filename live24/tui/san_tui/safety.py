@@ -2,6 +2,8 @@
 
 BOOT_MOUNTS = {"/", "/boot", "/boot/efi", "/run/live", "/run/live/medium", "/cdrom"}
 WILDCARD_ADDRS = {"", "0.0.0.0", "::", "::0", "*", "all"}
+# Vide ou absente : disque brut, connu. gpt et dos sont les tables qu'on sait lire.
+KNOWN_PARTITION_TABLES = {"", "none", "gpt", "dos", "msdos"}
 
 
 class SafetyError(Exception):
@@ -32,6 +34,9 @@ def refusal_reason(volume):
     holders = volume.get("holders") or []
     if holders or volume.get("active"):
         return "volume actif refusé"
+    pttype = str(volume.get("pttype") or "").strip().lower()
+    if pttype not in KNOWN_PARTITION_TABLES:
+        return "table de partitions inconnue ({})".format(pttype)
     return None
 
 

@@ -65,11 +65,30 @@ def main(argv=None):
     sub.add_parser("nvme-restore", help="exporter le NVMe-oF enregistré")
     sub.add_parser("perf-apply", help="appliquer le seul réglage mesuré, s'il existe")
     sub.add_parser("ab-apply", help="écrire le slot inactif si une mise à jour est en attente")
-    release_p = sub.add_parser("release-apply", help="appliquer une release GitHub sur le slot inactif")
-    release_p.add_argument("--tag", default="")
+    release_p = sub.add_parser("channels-sync", help="appliquer les canaux app et noyau, sans formulaire")
     release_p.add_argument("--api", default="")
+    apply_p = sub.add_parser("release-apply", help="appliquer la release la plus récente, sans formulaire")
+    apply_p.add_argument("--tag", default="")
+    apply_p.add_argument("--api", default="")
+    undo_p = sub.add_parser("release-undo", help="annuler la dernière promotion, ou le slot précédent")
+    undo_p.add_argument("--channel", choices=("app", "kernel"))
+    sub.add_parser("rescue-select", help="basculer sur l'image de secours si le slot ne démarre pas")
+    sub.add_parser("rescue-undo", help="annuler le choix de secours de ce démarrage")
+    sub.add_parser("latency-sample", help="mesurer le p99 de chaque LUN")
+    sub.add_parser("scsi-collect", help="relever les erreurs SCSI sans la charge du LUN")
+    sub.add_parser("ntp-apply", help="activer NTP sans bloquer le journal local")
+    sub.add_parser("ntp-undo", help="annuler le choix NTP automatique")
+    sub.add_parser("release-status", help="slots, dates et diff, sans rien appliquer")
+    sub.add_parser("config-export", help="reconstruire le fichier de conf déjà téléchargeable")
+    sub.add_parser("config-import", help="importer la conf déposée, par WWN, sans écran de mapping")
+    sub.add_parser("factory", help="effacer la conf si le marqueur usine est présent")
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
+    sub.add_parser("release-rollback", help="revenir au slot d'application précédent")
+    sub.add_parser("boot-inventory", help="écrire une fois l'inventaire disques, cartes et firmware")
+    sub.add_parser("syslog-apply", help="relayer le syslog s'il répond, sinon garder les journaux locaux")
+    sub.add_parser("syslog-local", help="annuler le syslog distant")
+    sub.add_parser("webui-unlock", help="lever le verrou de la WebUI")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
     sub.add_parser("quota-apply", help="poser les quotas du profil de volume")
     quota_undo = sub.add_parser("quota-undo", help="retirer le quota automatique")
@@ -85,14 +104,53 @@ def main(argv=None):
     sub.add_parser("chap-undo", help="reposer le secret CHAP précédent")
     sub.add_parser("portal-once", help="ouvrir le portail de secours si le lien est tombé")
     sub.add_parser("portal-watch", help="surveiller le lien de stockage")
-    sub.add_parser("portal-undo", help="retirer le portail de secours")
+    sub.add_parser("portal-undo", help="retirer le portail de secours et les portails ajoutés")
     sub.add_parser("lacp-auto", help="agréger le stockage si LACP est annoncé")
     sub.add_parser("lacp-undo", help="retirer l'agrégat automatique")
+    sub.add_parser("health-check", help="alertes SMART et température, sans changer les exports")
+    sub.add_parser("raid-scrub", help="scrub planifié, avec plafond de débit")
+    sub.add_parser("raid-scrub-stop", help="arrêter le scrub automatique")
+    sub.add_parser("raid-pace", help="reposer le plafond de reconstruction")
+    sub.add_parser("raid-pace-undo", help="retirer le plafond de reconstruction")
+    sub.add_parser("raid-spare-undo", help="retirer le spare ajouté automatiquement")
+    sub.add_parser("portal-drop", help="retirer un portail dont l'adresse a disparu")
+    sub.add_parser("iser-undo", help="désactiver iSER, le portail TCP reste")
+    sub.add_parser("bond-undo", help="retirer l'agrégat automatique")
+    sub.add_parser("mtu-undo", help="revenir à un MTU de 1500")
+    sub.add_parser("comfort", help="pair, témoin, groupes, QoS, audit et latence")
+    rep = sub.add_parser("replicate", help="répliquer si un pair est déjà écrit")
+    rep.add_argument("--follow", action="store_true")
+    sub.add_parser("replicate-stop", help="suspendre la réplication")
+    sub.add_parser("replicate-resume", help="reprendre la réplication automatique")
+    sub.add_parser("witness", help="interroger le témoin, ou rester local")
+    sub.add_parser("witness-stay", help="annuler une bascule et rester sur le slot local")
+    sub.add_parser("witness-resume", help="laisser de nouveau le témoin décider")
+    sub.add_parser("snapshot-groups", help="instantané des LUN qui partagent déjà un groupe")
+    sub.add_parser("qos-apply", help="appliquer le profil de volume déjà présent")
+    sub.add_parser("audit-prepare", help="préparer l'export d'audit signé")
+    sub.add_parser("inventory-api", help="inventaire sur 127.0.0.1")
+    sub.add_parser("inventory-stop", help="arrêter l'inventaire local")
+    sub.add_parser("inventory-resume", help="rétablir l'inventaire local")
+    sub.add_parser("metrics", help="métriques sur l'adresse d'administration")
+    sub.add_parser("metrics-stop", help="arrêter les métriques")
+    sub.add_parser("metrics-resume", help="rétablir les métriques")
+    sub.add_parser("latency-check", help="alerter si le p99 dépasse le banc")
+    sub.add_parser("retire", help="retirer un disque de données en échec")
+    sub.add_parser("retire-undo", help="annuler le retrait automatique")
 
     args = parser.parse_args(argv)
     paths = SanPaths(args.root)
     probe = CommandProbe()
     try:
+        if args.command in {
+            "comfort", "replicate", "replicate-stop", "replicate-resume",
+            "witness", "witness-stay", "witness-resume", "snapshot-groups",
+            "qos-apply", "audit-prepare", "inventory-api", "inventory-stop",
+            "inventory-resume", "metrics", "metrics-stop", "metrics-resume",
+            "latency-check", "retire", "retire-undo",
+        }:
+            from san_tui.comfort import main_command
+            return main_command(args, paths, probe)
         if args.command in (None, "tui"):
             from san_tui.ui import run_tui
             return run_tui(paths, probe)
@@ -138,18 +196,86 @@ def main(argv=None):
         if args.command == "ab-apply":
             from san_tui.runtime import run_ab
             return _print(run_ab(paths, probe))
+        if args.command == "channels-sync":
+            from san_tui.fabric import ConfigfsGate
+            from san_tui.release import read_token, sync_channels
+            import urllib.request
+            token = ""
+            token_file = os.environ.get("SAN_GITHUB_TOKEN_FILE", "")
+            if token_file:
+                token = read_token(token_file)
+            api = args.api or os.environ.get("SAN_RELEASE_API", "")
+
+            def fetcher(channel):
+                from san_tui.release import CHANNELS, fetch_release
+                spec = CHANNELS[channel]
+                return fetch_release(
+                    api, "", token, urllib.request.build_opener(),
+                    asset=spec["asset"], asset_sum=spec["sum"],
+                )
+
+            return _print(sync_channels(paths, fetcher, gate=ConfigfsGate()))
         if args.command == "release-apply":
             from san_tui.release import fetch_and_apply, read_token
+            if args.tag:
+                raise ReleaseError("la mise à jour est automatique")
             token = ""
             token_file = os.environ.get("SAN_GITHUB_TOKEN_FILE", "")
             if token_file:
                 token = read_token(token_file)
             return _print(fetch_and_apply(
                 paths,
-                tag=args.tag,
+                tag="",
                 api=args.api,
                 token=token,
             ))
+        if args.command == "release-undo":
+            from san_tui.release import undo_channel, undo_slot
+            if args.channel:
+                return _print(undo_channel(paths, args.channel))
+            return _print(undo_slot(paths))
+        if args.command == "rescue-select":
+            from san_tui.rescue import select_boot
+            return _print(select_boot(paths))
+        if args.command == "rescue-undo":
+            from san_tui.rescue import arm_undo, select_boot
+            arm_undo(paths)
+            return _print(select_boot(paths))
+        if args.command == "latency-sample":
+            from san_tui.latency import sample_exports
+            return _print(sample_exports(paths, probe))
+        if args.command == "scsi-collect":
+            from san_tui.scsilog import collect_dmesg
+            return _print(collect_dmesg(paths))
+        if args.command == "ntp-apply":
+            from san_tui.ntp import apply_ntp
+            server = os.environ.get("SAN_NTP_SERVER", "ntp.ubuntu.com")
+            try:
+                timeout = float(os.environ.get("SAN_NTP_TIMEOUT", "1"))
+            except ValueError:
+                timeout = 1.0
+            return _print(apply_ntp(paths, server=server, timeout=timeout))
+        if args.command == "ntp-undo":
+            from san_tui.ntp import undo_ntp
+            return _print(undo_ntp(paths))
+        if args.command == "release-status":
+            from san_tui.release import release_status
+            return _print(release_status(paths))
+        if args.command == "config-export":
+            from san_tui.configio import refresh_export
+            try:
+                ready = refresh_export(paths)
+            except PersistError as exc:
+                if "absente" in str(exc):
+                    return _print({"ready": False, "reason": str(exc)})
+                raise
+            return _print({"ready": True, "path": ready})
+        if args.command == "config-import":
+            from san_tui.configio import import_incoming
+            return _print(import_incoming(paths, probe))
+        if args.command == "factory":
+            from san_tui.configio import factory_reset
+            return _print(factory_reset(paths))
         if args.command == "ollama-advise":
             from san_tui.runtime import advise
             return _print(advise(paths))
@@ -157,6 +283,32 @@ def main(argv=None):
             from san_tui.runtime import rollback
             backend = RecordingBackend() if os.environ.get("SAN_DRY_RUN") == "1" else RtslibBackend()
             return _print(rollback(paths, probe, backend))
+        if args.command == "release-rollback":
+            from san_tui.release import rollback_slot
+            return _print(rollback_slot(paths))
+        if args.command == "boot-inventory":
+            from san_tui.probe import write_boot_inventory
+            try:
+                return _print(write_boot_inventory(paths, probe))
+            except Exception:
+                return _print({
+                    "disks": [],
+                    "nics": [],
+                    "firmware": {},
+                    "exports": [],
+                    "reason": "inventaire incomplet",
+                })
+        if args.command == "syslog-apply":
+            from san_tui.syslog import apply_remote
+            try:
+                return _print(apply_remote(paths))
+            except Exception:
+                return _print({"remote": False, "local": True, "reason": "erreur interne"})
+        if args.command == "syslog-local":
+            from san_tui.syslog import disable_remote
+            return _print(disable_remote(paths))
+        if args.command == "webui-unlock":
+            return _print(_unlock_webui(paths))
         if args.command == "toram-measure":
             from san_tui.runtime import measure_toram
             return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
@@ -165,6 +317,40 @@ def main(argv=None):
                 return _print(_auto(args, paths, probe))
             except Exception as exc:
                 return _print({"ok": False, "reason": exc.__class__.__name__})
+        if args.command == "health-check":
+            from san_tui.comfort import run_health
+            return _print(run_health(paths, probe))
+        if args.command == "raid-scrub":
+            from san_tui.comfort import run_scrub
+            return _print(run_scrub(paths))
+        if args.command == "raid-scrub-stop":
+            from san_tui.comfort import stop_scrub
+            return _print(stop_scrub(paths))
+        if args.command == "raid-pace":
+            from san_tui.comfort import run_pace
+            return _print(run_pace(paths))
+        if args.command == "raid-pace-undo":
+            from san_tui.comfort import undo_pace
+            return _print(undo_pace(paths))
+        if args.command == "raid-spare-undo":
+            from san_tui.comfort import undo_spare
+            from san_tui.runtime import MdadmBackend
+            return _print(undo_spare(paths, MdadmBackend()))
+        if args.command == "portal-drop":
+            from san_tui.comfort import drop_absent_portals
+            return _print(drop_absent_portals(paths, probe, "/sys/kernel/config"))
+        if args.command == "iser-undo":
+            from san_tui.comfort import undo_iser
+            return _print(undo_iser(paths, "/sys/kernel/config"))
+        if args.command == "bond-undo":
+            from san_tui.comfort import undo_bond
+            from san_tui.link import CommandRunner
+            return _print(undo_bond(paths, CommandRunner()))
+        if args.command == "mtu-undo":
+            from san_tui.comfort import undo_mtu
+            from san_tui.link import CommandRunner
+            from san_tui.runtime import _storage_iface
+            return _print(undo_mtu(paths, CommandRunner(), _storage_iface()))
         if args.command == "persist-select":
             volume = _need_volume(probe, args.id)
             choice = select_support(paths, args.role, volume, args.confirm)
@@ -258,8 +444,11 @@ def _auto(args, paths, probe):
         watch(paths, probe)
         return {"ok": True}
     if args.command == "portal-undo":
-        from san_tui.portal import undo
-        return undo(paths, probe)
+        from san_tui.portal import undo as undo_standby
+        from san_tui.comfort import undo_extra_portals
+        standby = undo_standby(paths, probe)
+        extra = undo_extra_portals(paths, "/sys/kernel/config")
+        return {"standby": standby, "extra": extra}
     if args.command == "lacp-auto":
         from san_tui.lacp import apply_lacp
         return apply_lacp(paths, probe)
@@ -314,3 +503,10 @@ def _squash_bytes():
         except (OSError, ValueError):
             continue
     return 0
+
+
+def _unlock_webui(paths):
+    path = paths.root / "var" / "lib" / "san" / "webui" / "lock.json"
+    if path.is_file():
+        path.unlink()
+    return {"locked": False}

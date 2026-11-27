@@ -1,0 +1,29 @@
+#!/bin/sh
+# Regenerates the loopback WebUI certificate on every boot.
+# The private key is written under /var/lib/san and is not part of the ISO.
+set -eu
+
+root=${SAN_ROOT:-}
+if [ -n "$root" ]; then
+    root=${root%/}
+fi
+dir="$root/var/lib/san/webui/tls"
+install -d -m 0750 "$dir"
+if [ "$(id -u)" -eq 0 ] && id sanui >/dev/null 2>&1; then
+    chown sanui:sanui "$dir"
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+umask 077
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -days 2 -nodes \
+    -keyout "$tmp/key.pem" -out "$tmp/cert.pem" \
+    -subj "/CN=localhost" \
+    -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+if [ "$(id -u)" -eq 0 ] && id sanui >/dev/null 2>&1; then
+    install -o sanui -g sanui -m 0640 "$tmp/key.pem" "$dir/key.pem"
+    install -o sanui -g sanui -m 0644 "$tmp/cert.pem" "$dir/cert.pem"
+else
+    install -m 0640 "$tmp/key.pem" "$dir/key.pem"
+    install -m 0644 "$tmp/cert.pem" "$dir/cert.pem"
+fi

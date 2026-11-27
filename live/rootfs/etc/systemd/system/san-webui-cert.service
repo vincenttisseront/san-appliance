@@ -1,0 +1,14 @@
+[Unit]
+Description=Regenerate the local WebUI TLS certificate
+DefaultDependencies=no
+After=local-fs.target san-webui-secrets.service
+Before=san-webui.service
+RequiresMountsFor=/var/lib/san
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-webui-cert
+
+[Install]
+WantedBy=san-webui.service

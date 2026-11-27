@@ -1,0 +1,9 @@
+[Unit]
+Description=Retire un portail iSCSI disparu, les autres restent
+After=san-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-portal-follow
+StandardOutput=journal+console
+StandardError=journal+console

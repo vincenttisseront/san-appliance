@@ -36,6 +36,9 @@ def screen_lines(name, snap, paths):
             lines.append("  wwn={} série={} taille={}".format(
                 disk.get("wwn") or "-", disk.get("serial") or "-", disk.get("size")
             ))
+            health = _health_line(paths, disk["id"])
+            if health:
+                lines.append(health)
         return lines
     if name == "Interfaces":
         lines = []
@@ -57,11 +60,16 @@ def screen_lines(name, snap, paths):
         lines = []
         for target in document.get("targets") or []:
             acls = target.get("acls") or [{}]
-            lines.append("{}  lun {}  portail {}:{}".format(
+            address = (target.get("portal") or {}).get("address")
+            port = (target.get("portal") or {}).get("port")
+            dns = _portal_dns(paths, target.get("iqn"), address)
+            portal = "{}:{}".format(address, port)
+            if dns:
+                portal = "{} ({})".format(portal, dns)
+            lines.append("{}  lun {}  portail {}".format(
                 target.get("iqn"),
                 target.get("lun"),
-                (target.get("portal") or {}).get("address"),
-                (target.get("portal") or {}).get("port"),
+                portal,
             ))
             lines.append("  volume {}".format((target.get("volume") or {}).get("id")))
             lines.append("  acl {}  chap {}".format(
@@ -74,6 +82,38 @@ def screen_lines(name, snap, paths):
     lines = ["Les alertes sont aussi écrites sur la console série.", ""]
     lines.extend("{}  {}  {}".format(item["time"], item["level"], item["message"]) for item in alerts)
     return lines
+
+
+def _health_line(paths, disk_id):
+    try:
+        data = _read_json(paths.run / "health.json") or {}
+    except Exception:
+        return ""
+    item = (data.get("disks") or {}).get(disk_id) or {}
+    if not item:
+        return ""
+    passed = item.get("passed")
+    if passed is False:
+        state = "échec"
+    elif passed is True:
+        state = "ok"
+    else:
+        state = "inconnu"
+    temp = item.get("temperature")
+    if isinstance(temp, int):
+        return "  SMART {}  {}°C".format(state, temp)
+    return "  SMART {}".format(state)
+
+
+def _portal_dns(paths, iqn, address):
+    try:
+        data = _read_json(paths.run / "portals.json") or {}
+    except Exception:
+        return ""
+    for item in data.get(iqn) or []:
+        if item.get("address") == address and item.get("dns"):
+            return item["dns"]
+    return ""
 
 
 def _network_lines(paths, role):

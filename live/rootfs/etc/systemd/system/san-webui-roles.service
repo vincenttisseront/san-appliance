@@ -1,0 +1,13 @@
+[Unit]
+Description=Comptes WebUI lecture seule et release
+Before=san-webui.service
+After=san-webui-secrets.service systemd-sysusers.service
+# Échec isolé : la WebUI reste en lecture seule, iSCSI n'est pas concerné.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-webui-roles
+
+[Install]
+WantedBy=multi-user.target

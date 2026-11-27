@@ -1,0 +1,9 @@
+[Unit]
+Description=Scrub RAID avec un plafond de débit
+After=san-raid.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-raid-scrub
+StandardOutput=journal+console
+StandardError=journal+console
