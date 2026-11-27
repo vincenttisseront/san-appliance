@@ -1,10 +1,17 @@
 #!/usr/bin/python3
-"""Pose les adresses admin et stockage si le support de conf a été accepté."""
+"""Pose les adresses admin et stockage si le support de conf a été accepté.
+
+L'agrégat et le MTU 9000 sont décidés tout seuls. S'ils échouent, l'adresse
+de stockage est quand même posée : iSCSI peut démarrer.
+"""
 
 import json
-import subprocess
-import time
+import sys
 from pathlib import Path
+
+LIB = Path("/usr/lib/san-tui")
+if LIB.is_dir():
+    sys.path.insert(0, str(LIB))
 
 
 def main():
@@ -27,6 +34,39 @@ def main():
     if not admin or not storage or admin == storage:
         print("san-net-apply: interfaces admin et stockage non distinctes")
         return
+    if _comfort(network):
+        return
+    _plain(network)
+
+
+def _comfort(network):
+    try:
+        from san_tui.auto import undone
+        from san_tui.link import CommandRunner, configure_links
+        from san_tui.paths import SanPaths
+        from san_tui.probe import CommandProbe
+    except Exception as exc:
+        print("san-net-apply: confort indisponible : {}".format(exc.__class__.__name__))
+        return False
+    paths = SanPaths("/")
+    try:
+        result = configure_links(
+            network,
+            CommandRunner(),
+            CommandProbe().list_interfaces(),
+            bond=not undone(paths, "bond"),
+            jumbo=not undone(paths, "mtu"),
+        )
+    except Exception as exc:
+        print("san-net-apply: confort ignoré : {}".format(exc.__class__.__name__))
+        return False
+    print("san-net-apply: {}".format(json.dumps(result, ensure_ascii=False)))
+    return bool(result.get("storage"))
+
+
+def _plain(network):
+    import subprocess
+    import time
     for role in ("admin", "storage"):
         item = network.get(role) or {}
         iface = item.get("iface") or ""
@@ -41,12 +81,7 @@ def main():
             print("san-net-apply: interface absente {}".format(iface))
             continue
         subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-        mtu = item.get("mtu")
-        peer = item.get("peer_mtu")
-        if mtu == 9000 and peer == 9000:
-            subprocess.run(["ip", "link", "set", iface, "mtu", "9000"], check=False)
-        else:
-            subprocess.run(["ip", "link", "set", iface, "mtu", "1500"], check=False)
+        subprocess.run(["ip", "link", "set", iface, "mtu", "1500"], check=False)
         subprocess.run(["ip", "addr", "replace", address, "dev", iface], check=False)
         print("san-net-apply: {} {} dev {}".format(role, address, iface))
 

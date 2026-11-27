@@ -6,8 +6,11 @@ import subprocess
 from pathlib import Path
 
 from san_tui.alerts import add_alert
+from san_tui.auto import undone
 from san_tui.identity import identity_problem
+from san_tui.link import attach_dns, lookup_name
 from san_tui.persist import PersistError, load_choice, load_exports, save_exports
+from san_tui.portals import bind_address, iser_module_present, modules_dir, serving_portals
 from san_tui.safety import SafetyError, assert_usable, check_portal, describe_action, require_confirmation
 
 
@@ -117,35 +120,79 @@ def restore(paths, probe, backend):
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     plan = document.get("network") or {}
     claimed = set()
+    extras = not undone(paths, "extra-portals")
     for target in document["targets"]:
         iqn = target.get("iqn") or "?"
-        reason = _target_problem(target, plan, probe, secrets, claimed)
+        reason = _target_problem(target, plan, probe, secrets, claimed, extras)
         if reason:
             add_alert(paths, "error", "{} : {}".format(iqn, reason), secrets.values())
             skipped.append({"iqn": iqn, "reason": reason})
             continue
         ref = target["acls"][0]["chap_secret_ref"]
+        runtime = _runtime_target(paths, target, plan, probe, extras)
+        if runtime.get("iser") == "skip":
+            add_alert(paths, "info", "{} : iSER ignoré : module absent de l'image".format(iqn))
         try:
-            backend.apply(target, secrets[ref], probe)
+            backend.apply(runtime, secrets[ref], probe)
         except Exception as exc:
             detail = " ".join(str(exc).split())[:180]
             message = "échec LIO : {} {}".format(exc.__class__.__name__, detail).strip()
             add_alert(paths, "error", "{} : {}".format(iqn, message), secrets.values())
             skipped.append({"iqn": iqn, "reason": message})
             continue
+        for note in list(getattr(backend, "notes", []) or []):
+            level = "info" if ("ignoré" in note or "conservé" in note) else "error"
+            add_alert(paths, level, "{} : {}".format(iqn, note))
+        if getattr(backend, "notes", None) is not None:
+            backend.notes.clear()
+        _remember_portals(paths, iqn, runtime.get("portals") or [])
         exported.append(iqn)
         portal = target.get("portal") or {}
         claimed.add((portal.get("address"), int(portal.get("port") or 3260)))
     return {"exported": exported, "skipped": skipped}
 
 
-def _target_problem(target, plan, probe, secrets, claimed):
+def _runtime_target(paths, target, plan, probe, extras):
+    portals = [
+        attach_dns(portal, lookup_name)
+        for portal in serving_portals(target, plan, probe, extras=extras)
+    ]
+    runtime = dict(target)
+    runtime["portals"] = portals
+    if undone(paths, "iser"):
+        runtime["iser"] = "off"
+    elif iser_module_present(modules_dir()):
+        runtime["iser"] = "on"
+    else:
+        runtime["iser"] = "skip"
+    return runtime
+
+
+def _remember_portals(paths, iqn, portals):
+    path = paths.run / "portals.json"
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
+    current[iqn] = [
+        {
+            "address": item.get("address"),
+            "port": item.get("port"),
+            "dns": item.get("dns") or "",
+        }
+        for item in portals
+    ]
+    path.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _target_problem(target, plan, probe, secrets, claimed, extras=True):
     portal = target.get("portal") or {}
     reason = check_portal(portal, plan)
     if reason:
         return reason
-    storage_if = (plan.get("storage") or {}).get("iface")
-    if not probe.interface_has_address(storage_if, portal.get("address")):
+    if not serving_portals(target, plan, probe, extras=extras):
         return "réseau stockage absent : {}".format(portal.get("address"))
     volume = target.get("volume") or {}
     current = probe.get_volume(volume.get("id"))
@@ -194,7 +241,11 @@ class RecordingBackend:
 class RtslibBackend:
     """Applique une cible via python3-rtslib-fb. Le portail est une adresse précise."""
 
+    def __init__(self):
+        self.notes = []
+
     def apply(self, target, secret, probe):
+        self.notes = []
         _prepare_lio()
         try:
             from rtslib_fb import (
@@ -235,12 +286,20 @@ class RtslibBackend:
                 # AuthMethod est un paramètre iSCSI. Son absence sur un vieux noyau
                 # ne doit pas ouvrir le portail sans ACL : authentication reste à 1.
                 pass
-            NetworkPortal(
-                tpg,
-                target["portal"]["address"],
-                int(target["portal"]["port"]),
-                mode="create",
-            )
+            bound = []
+            portals = target.get("portals") or [target.get("portal") or {}]
+            for portal in portals:
+                try:
+                    bound.append(NetworkPortal(
+                        tpg,
+                        bind_address(portal),
+                        int(portal.get("port") or 3260),
+                        mode="create",
+                    ))
+                except Exception as exc:
+                    self.notes.append("portail ignoré : {}".format(exc.__class__.__name__))
+            if not bound:
+                raise ExportError(self.notes[-1] if self.notes else "aucun portail")
             lun = LUN(tpg, int(target["lun"]), storage_object=storage)
             acl = target["acls"][0]
             node = NodeACL(tpg, acl["initiator"], mode="create")
@@ -249,6 +308,11 @@ class RtslibBackend:
             MappedLUN(node, int(target["lun"]), tpg_lun=lun, write_protect=False)
             _apply_measured_iscsi(tpg)
             tpg.enable = True
+            if target.get("iser") == "on":
+                try:
+                    self.notes.extend(_enable_iser(bound))
+                except Exception:
+                    self.notes.append("iSER non activé : iSCSI TCP conservé")
         except Exception:
             if tgt is not None:
                 try:
@@ -264,6 +328,28 @@ class RtslibBackend:
         # Le secret ne doit pas rester dans l'environnement du processus.
         os.environ.pop("SAN_CHAP_SECRET", None)
         return name
+
+
+def _enable_iser(portals):
+    """Active iSER si l'attribut existe. Un échec laisse le portail TCP."""
+    proc = subprocess.run(["modprobe", "ib_isert"], check=False, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return ["iSER non activé : iSCSI TCP conservé"]
+    wrote = False
+    for portal in portals:
+        path = getattr(portal, "path", None)
+        if not path:
+            continue
+        flag = Path(str(path)) / "iser"
+        try:
+            if flag.is_file():
+                flag.write_text("1\n", encoding="utf-8")
+                wrote = True
+        except OSError:
+            continue
+    if not wrote:
+        return ["iSER non activé : iSCSI TCP conservé"]
+    return []
 
 
 def _prepare_lio():

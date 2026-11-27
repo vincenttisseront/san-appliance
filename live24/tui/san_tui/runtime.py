@@ -18,7 +18,7 @@ from san_tui.nvme import NvmeError, subsystem_problem
 from san_tui.ollama import decide, fetch_once, rollback_needed
 from san_tui.perf import assert_kept_safe, render_table
 from san_tui.persist import PersistError, _read_json, _write_json, load_choice, rollback_files
-from san_tui.raid import RaidError, plan_assemble
+from san_tui.raid import RaidError, apply_raid_comfort, plan_assemble
 from san_tui.toram import decide as toram_decide
 
 
@@ -123,6 +123,7 @@ def assemble_raid(paths, probe, backend):
         add_alert(paths, "error", str(exc))
         return {"assemble": [], "skipped": [{"name": "*", "reason": str(exc)}]}
     done = []
+    assembled = []
     for array in plan["assemble"]:
         try:
             backend.assemble(array["name"], array["devices"])
@@ -131,6 +132,12 @@ def assemble_raid(paths, probe, backend):
             plan["skipped"].append({"name": array["name"], "reason": exc.__class__.__name__})
             continue
         done.append(array["name"])
+        assembled.append(array)
+    try:
+        plan["comfort"] = apply_raid_comfort(paths, probe, backend, assembled)
+    except Exception as exc:
+        add_alert(paths, "error", "RAID confort ignoré : {}".format(exc.__class__.__name__))
+        plan["comfort"] = {"pace": [], "spare": None, "reason": exc.__class__.__name__}
     for item in plan["skipped"]:
         add_alert(paths, "error", "RAID {} : {}".format(item["name"], item["reason"]))
     plan["assemble"] = done
@@ -382,6 +389,34 @@ class MdadmBackend:
         if proc.returncode != 0:
             raise RaidError(proc.stderr.strip() or "mdadm a refusé l'assemblage")
 
+    def set_speed(self, name, max_kb):
+        md_dir = _md_sysfs(name)
+        speed = md_dir / "sync_speed_max"
+        if not speed.is_file():
+            raise RaidError("plafond introuvable")
+        speed.write_text("{}\n".format(int(max_kb)), encoding="utf-8")
+        global_cap = Path("/proc/sys/dev/raid/speed_limit_max")
+        if global_cap.is_file():
+            global_cap.write_text("{}\n".format(int(max_kb)), encoding="utf-8")
+
+    def add_spare(self, name, device):
+        if not str(device).startswith("/dev/disk/by-id/"):
+            raise RaidError("spare hors by-id")
+        proc = subprocess.run(
+            ["mdadm", "--manage", "/dev/md/{}".format(name), "--add", device],
+            text=True, capture_output=True, check=False,
+        )
+        if proc.returncode != 0:
+            raise RaidError(proc.stderr.strip() or "mdadm a refusé le spare")
+
+    def remove_spare(self, name, device):
+        proc = subprocess.run(
+            ["mdadm", "--manage", "/dev/md/{}".format(name), "--remove", device],
+            text=True, capture_output=True, check=False,
+        )
+        if proc.returncode != 0:
+            raise RaidError(proc.stderr.strip() or "retrait du spare refusé")
+
 
 class LvmBackend:
     def activate(self, name, pvs):
@@ -471,9 +506,9 @@ class MeasuredWriter:
             _write_governors(value)
             return
         if key == "mtu":
-            if int(value) != 9000 or not _peer_mtu_matches(9000):
-                raise ValueError("mtu 9000 refusé sans l'autre extrémité")
-            _set_storage_mtu(9000)
+            if int(value) != 9000:
+                raise ValueError("mtu refusé")
+            _commit_jumbo_or_stay()
             return
         if key == "hugepages":
             Path("/proc/sys/vm/nr_hugepages").write_text(str(int(value)), encoding="utf-8")
@@ -728,32 +763,53 @@ def _write_governors(name):
 
 
 def _storage_mtu():
-    plan = _read_json(Path("/var/lib/san/conf/exports.json")) or {}
-    iface = ((plan.get("network") or {}).get("storage") or {}).get("iface")
+    iface = _storage_iface()
     if not iface:
         return ""
     return _read_text(Path("/sys/class/net") / iface / "mtu")
 
 
-def _peer_mtu_matches(want):
+def _storage_iface():
+    exports = _read_json(Path("/var/lib/san/conf/exports.json")) or {}
     plan = _read_json(Path("/etc/san/network.json")) or {}
-    exports = _read_json(Path("/var/lib/san/conf/exports.json")) or {}
     network = exports.get("network") or plan
-    peer = (network.get("storage") or {}).get("peer_mtu")
-    return peer == want
+    return ((network.get("storage") or {}).get("iface") or "")
 
 
-def _set_storage_mtu(value):
-    exports = _read_json(Path("/var/lib/san/conf/exports.json")) or {}
-    iface = ((exports.get("network") or {}).get("storage") or {}).get("iface")
+def _commit_jumbo_or_stay():
+    """DF d'abord. Un échec ou un pair absent laisse 1500, sans arrêter iSCSI."""
+    from san_tui.auto import undone
+    from san_tui.link import CommandRunner, select_mtu
+    from san_tui.paths import SanPaths
+    iface = _storage_iface()
+    runner = CommandRunner()
     if not iface:
-        raise ValueError("interface stockage absente")
-    proc = subprocess.run(
-        ["ip", "link", "set", iface, "mtu", str(value)],
-        check=False, capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        raise ValueError("mtu refusé")
+        return
+    try:
+        if undone(SanPaths("/"), "mtu"):
+            runner.set_mtu(iface, 1500)
+            return
+        runner.link_up(iface)
+        select_mtu(iface, runner.route_peer(iface), runner)
+    except Exception:
+        runner.set_mtu(iface, 1500)
+
+
+def _md_sysfs(name):
+    real = Path("/dev/md") / name
+    if real.exists():
+        kernel = Path(os.path.realpath(real)).name
+        return Path("/sys/block") / kernel / "md"
+    block = Path("/sys/block")
+    if block.is_dir():
+        for entry in block.glob("md*"):
+            array = entry / "md" / "array_name"
+            try:
+                if array.is_file() and array.read_text(encoding="utf-8").strip() == name:
+                    return entry / "md"
+            except OSError:
+                continue
+    return Path("/sys/block") / name / "md"
 
 
 def _pin_iscsi(cpus):

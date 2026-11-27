@@ -75,6 +75,10 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-net-apply" \
     "$ROOT/usr/local/sbin/san-restore-boot" \
     "$ROOT/usr/local/sbin/san-raid" \
+    "$ROOT/usr/local/sbin/san-raid-scrub" \
+    "$ROOT/usr/local/sbin/san-raid-pace" \
+    "$ROOT/usr/local/sbin/san-health" \
+    "$ROOT/usr/local/sbin/san-portal-follow" \
     "$ROOT/usr/local/sbin/san-lvm" \
     "$ROOT/usr/local/sbin/san-nvme" \
     "$ROOT/usr/local/sbin/san-perf" \
@@ -125,6 +129,10 @@ systemctl --root="$ROOT" enable \
     san-conf-bind.service \
     san-net-apply.service \
     san-raid.service \
+    san-raid-scrub.timer \
+    san-raid-pace.timer \
+    san-health.timer \
+    san-portal-follow.timer \
     san-lvm.service \
     san-nvme.service \
     san-perf.service \

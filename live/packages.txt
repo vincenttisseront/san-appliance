@@ -26,3 +26,5 @@ openssh-server
 fio
 ethtool
 nvme-cli
+smartmontools
+iputils-ping

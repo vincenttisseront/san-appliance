@@ -1,0 +1,9 @@
+[Unit]
+Description=Alertes SMART et température, sans modifier les exports
+After=san-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-health
+StandardOutput=journal+console
+StandardError=journal+console

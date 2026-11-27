@@ -71,6 +71,17 @@ def main(argv=None):
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
+    sub.add_parser("health-check", help="alertes SMART et température, sans changer les exports")
+    sub.add_parser("raid-scrub", help="scrub planifié, avec plafond de débit")
+    sub.add_parser("raid-scrub-stop", help="arrêter le scrub automatique")
+    sub.add_parser("raid-pace", help="reposer le plafond de reconstruction")
+    sub.add_parser("raid-pace-undo", help="retirer le plafond de reconstruction")
+    sub.add_parser("raid-spare-undo", help="retirer le spare ajouté automatiquement")
+    sub.add_parser("portal-drop", help="retirer un portail dont l'adresse a disparu")
+    sub.add_parser("portal-undo", help="retirer les portails ajoutés automatiquement")
+    sub.add_parser("iser-undo", help="désactiver iSER, le portail TCP reste")
+    sub.add_parser("bond-undo", help="retirer l'agrégat automatique")
+    sub.add_parser("mtu-undo", help="revenir à un MTU de 1500")
 
     args = parser.parse_args(argv)
     paths = SanPaths(args.root)
@@ -143,6 +154,43 @@ def main(argv=None):
         if args.command == "toram-measure":
             from san_tui.runtime import measure_toram
             return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
+        if args.command == "health-check":
+            from san_tui.comfort import run_health
+            return _print(run_health(paths, probe))
+        if args.command == "raid-scrub":
+            from san_tui.comfort import run_scrub
+            return _print(run_scrub(paths))
+        if args.command == "raid-scrub-stop":
+            from san_tui.comfort import stop_scrub
+            return _print(stop_scrub(paths))
+        if args.command == "raid-pace":
+            from san_tui.comfort import run_pace
+            return _print(run_pace(paths))
+        if args.command == "raid-pace-undo":
+            from san_tui.comfort import undo_pace
+            return _print(undo_pace(paths))
+        if args.command == "raid-spare-undo":
+            from san_tui.comfort import undo_spare
+            from san_tui.runtime import MdadmBackend
+            return _print(undo_spare(paths, MdadmBackend()))
+        if args.command == "portal-drop":
+            from san_tui.comfort import drop_absent_portals
+            return _print(drop_absent_portals(paths, probe, "/sys/kernel/config"))
+        if args.command == "portal-undo":
+            from san_tui.comfort import undo_extra_portals
+            return _print(undo_extra_portals(paths, "/sys/kernel/config"))
+        if args.command == "iser-undo":
+            from san_tui.comfort import undo_iser
+            return _print(undo_iser(paths, "/sys/kernel/config"))
+        if args.command == "bond-undo":
+            from san_tui.comfort import undo_bond
+            from san_tui.link import CommandRunner
+            return _print(undo_bond(paths, CommandRunner()))
+        if args.command == "mtu-undo":
+            from san_tui.comfort import undo_mtu
+            from san_tui.link import CommandRunner
+            from san_tui.runtime import _storage_iface
+            return _print(undo_mtu(paths, CommandRunner(), _storage_iface()))
         if args.command == "persist-select":
             volume = _need_volume(probe, args.id)
             choice = select_support(paths, args.role, volume, args.confirm)
