@@ -1,0 +1,9 @@
+[Unit]
+Description=Plafond de reconstruction RAID
+After=san-raid.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-raid-pace
+StandardOutput=journal+console
+StandardError=journal+console

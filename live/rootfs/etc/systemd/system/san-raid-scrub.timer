@@ -1,0 +1,10 @@
+[Unit]
+Description=Scrub RAID hebdomadaire
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

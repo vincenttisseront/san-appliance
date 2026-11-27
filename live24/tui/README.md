@@ -12,7 +12,7 @@ Outils locaux pour l'appliance live Ubuntu 24.04. Ce répertoire ne construit pa
 
 ## Réseau
 
-L'interface et l'adresse d'administration sont distinctes de celles du stockage. Le portail iSCSI est exactement l'adresse de stockage. `0.0.0.0` et `::` sont refusés. Il n'y a pas de mode démo ni d'ACL générée : un initiateur, une ACL, un CHAP.
+L'interface et l'adresse d'administration sont distinctes de celles du stockage. L'initiateur utilise l'adresse IP de stockage, jamais un nom. Les autres adresses IPv4 hors de l'interface d'administration sont des portails en plus. `0.0.0.0` et `::` sont refusés. Il n'y a pas de mode démo ni d'ACL générée : un initiateur, une ACL, un CHAP. Une commande sans argument retire un choix déjà pris (`portal-undo`, `iser-undo`, `mtu-undo`, `bond-undo`, `raid-spare-undo`, `raid-pace-undo`, `raid-scrub-stop`). Elle n'ouvre pas de formulaire.
 
 Le secret CHAP est lu dans un fichier de mode `0600`. Il est stocké dans `secrets.json` (`0600`), jamais dans `exports.json` ni dans les alertes.
 

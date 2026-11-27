@@ -30,3 +30,5 @@ openssl
 systemd-timesyncd
 ethtool
 nvme-cli
+smartmontools
+iputils-ping
