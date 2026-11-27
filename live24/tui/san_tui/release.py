@@ -290,6 +290,34 @@ def fetch_release(api, tag, token, opener):
     return archive, text
 
 
+def rollback_slot(paths):
+    """Remet le pointeur sur l'autre slot, une fois. N'efface ni données ni exports."""
+    state = load_state(paths)
+    current = state["active"]
+    if state.get("rolled_back"):
+        return {
+            "rollback": False,
+            "slot": current,
+            "reason": "déjà sur le slot précédent",
+        }
+    previous = inactive_slot(current)
+    slot_dir = app_dir(paths) / previous
+    if not slot_dir.is_dir() or not any(slot_dir.iterdir()):
+        raise ReleaseError("slot précédent absent")
+    updated = {
+        "version": 1,
+        "active": previous,
+        "rolled_back": True,
+        "previous": current,
+        "slots": {
+            "a": dict((state.get("slots") or {}).get("a") or {}),
+            "b": dict((state.get("slots") or {}).get("b") or {}),
+        },
+    }
+    _write_state(paths, updated)
+    return {"rollback": True, "slot": previous, "previous": current}
+
+
 def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None):
     client = opener or urllib.request.build_opener()
     try:

@@ -3,8 +3,10 @@
  * /appliance-update is served here and forwarded to the root updater on 127.0.0.1:9753.
  */
 import http from 'node:http'
+import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
+import { handleAppliance } from './guard.mjs'
 
 const PAGE = `<!DOCTYPE html>
 <html lang="fr">
@@ -15,7 +17,7 @@ const PAGE = `<!DOCTYPE html>
 <body>
 <main>
 <h1>Mise à jour de l'application</h1>
-<p>Release GitHub de vincenttisseront/san-appliance. L'empreinte est vérifiée avant écriture. Un échec laisse les exports en place. Le jeton n'est pas enregistré dans l'image.</p>
+<p>Release GitHub de vincenttisseront/san-appliance. L'empreinte est vérifiée avant écriture. Un échec laisse les exports en place. Le jeton n'est pas enregistré dans l'image. La consultation est en lecture seule. Appliquer une release demande le compte release, distinct, affiché une fois sur la console série.</p>
 <form id="update">
 <label>Version <input name="tag" placeholder="v1.2.3 ou vide pour latest"></label>
 <button type="submit">Appliquer</button>
@@ -90,6 +92,26 @@ function askUpdater(body) {
   })
 }
 
+const ROLES_PATH = process.env.SAN_WEBUI_ROLES || '/run/san/webui-roles.json'
+const LOCK_PATH = process.env.SAN_WEBUI_LOCK || '/var/lib/san/webui/lock.json'
+
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return fallback
+  }
+}
+
+function writeLock(lock) {
+  try {
+    fs.mkdirSync(LOCK_PATH.replace(/\/[^/]+$/, ''), { recursive: true })
+    fs.writeFileSync(LOCK_PATH, JSON.stringify(lock) + '\n', { mode: 0o640 })
+  } catch {
+    // Un verrou illisible ne doit pas arrêter la page, ni iSCSI.
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const local = req.socket.localAddress
   if (local !== '127.0.0.1' && local !== '::ffff:127.0.0.1') {
@@ -104,6 +126,19 @@ const server = http.createServer(async (req, res) => {
     return
   }
   if (path === '/appliance-update' && req.method === 'POST') {
+    const decision = handleAppliance({
+      method: 'POST',
+      authorization: req.headers.authorization,
+      roles: readJson(ROLES_PATH, {}),
+      lock: readJson(LOCK_PATH, {}),
+      now: Date.now(),
+    })
+    writeLock(decision.lock)
+    if (!decision.allow) {
+      res.writeHead(decision.status, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ applied: false, error: decision.error || 'refusé' }) + '\n')
+      return
+    }
     const chunks = []
     let size = 0
     for await (const chunk of req) {

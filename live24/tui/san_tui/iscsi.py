@@ -7,6 +7,7 @@ from pathlib import Path
 
 from san_tui.alerts import add_alert
 from san_tui.identity import identity_problem
+from san_tui.mode import enter_diagnostic
 from san_tui.persist import PersistError, load_choice, load_exports, save_exports
 from san_tui.safety import SafetyError, assert_usable, check_portal, describe_action, require_confirmation
 
@@ -95,25 +96,31 @@ def restore(paths, probe, backend):
     try:
         choice = load_choice(paths)
     except PersistError as exc:
-        add_alert(paths, "error", "conf invalide : {}".format(exc))
-        return {"exported": [], "skipped": [{"iqn": "*", "reason": str(exc)}]}
+        message = "conf invalide : {}".format(exc)
+        add_alert(paths, "error", message)
+        enter_diagnostic(paths, message)
+        return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     if not choice or not choice.get("conf"):
         add_alert(paths, "info", "aucun support de conf choisi : rien n'est exporté")
         return {"exported": [], "skipped": []}
     if choice.get("version") != 2:
         message = "version de support refusée"
         add_alert(paths, "error", message)
+        enter_diagnostic(paths, message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     conf_volume = probe.get_volume(choice["conf"]["id"])
     mismatch = identity_problem(choice["conf"], conf_volume, "support de conf")
     if mismatch:
         add_alert(paths, "error", mismatch)
+        enter_diagnostic(paths, mismatch)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": mismatch}]}
     try:
         document, secrets = load_exports(paths)
     except PersistError as exc:
         message = "conf invalide : {}".format(exc)
         add_alert(paths, "error", message)
+        if str(exc) != "conf absente":
+            enter_diagnostic(paths, message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     plan = document.get("network") or {}
     claimed = set()
