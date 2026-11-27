@@ -199,6 +199,7 @@ function proxy(req, res, sessionHeader) {
     method: req.method,
     headers,
   }, (incoming) => {
+    endWrite()
     const forwarded = { ...incoming.headers }
     const cookies = forwarded['set-cookie']
       ? (Array.isArray(forwarded['set-cookie']) ? forwarded['set-cookie'] : [forwarded['set-cookie']])
@@ -208,6 +209,7 @@ function proxy(req, res, sessionHeader) {
     incoming.pipe(res)
   })
   upstream.on('error', () => {
+    endWrite()
     if (!res.headersSent) {
       res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
     }
