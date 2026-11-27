@@ -231,6 +231,21 @@ def apply_verified(paths, archive, checksum_text, health=None, gate=None, bench=
     measured = measure()
     if not isinstance(measured, dict) or not measured.get("pass"):
         raise ReleaseError("banc fio refusé")
+    from san_tui.tune import release_refused
+    refused, why = release_refused(paths, measured)
+    if refused:
+        result = {
+            "applied": False,
+            "slot": current,
+            "previous": current,
+            "rollback": False,
+            "sha256": digest,
+            "channel": channel,
+            "p99_us": measured.get("p99_us"),
+            "reason": why,
+        }
+        append_audit(paths, result, "refusé")
+        return result
     use_gate = gate if gate is not None else _null_gate()
     frozen = False
     if channel == "app":

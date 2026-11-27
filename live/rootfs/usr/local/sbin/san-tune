@@ -1,0 +1,4 @@
+#!/bin/sh
+# Réglages iSCSI. Un échec laisse la cible servie.
+/usr/local/sbin/san-tui tune || true
+exit 0

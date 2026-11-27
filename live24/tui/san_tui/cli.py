@@ -125,6 +125,14 @@ def main(argv=None):
     sub.add_parser("iser-undo", help="désactiver iSER, le portail TCP reste")
     sub.add_parser("bond-undo", help="retirer l'agrégat automatique")
     sub.add_parser("mtu-undo", help="revenir à un MTU de 1500")
+    sub.add_parser("tune", help="poser les réglages iSCSI automatiques")
+    sub.add_parser("queues-undo", help="retirer le nombre de files iSCSI")
+    sub.add_parser("uring-undo", help="retirer io_uring")
+    sub.add_parser("governor-undo", help="retirer le gouverneur performance")
+    sub.add_parser("cache-undo", help="revenir au write-through")
+    sub.add_parser("preallocate-undo", help="retirer la préallocation du backstore")
+    sub.add_parser("hugepages-undo", help="retirer les hugepages")
+    sub.add_parser("sessions-undo", help="revenir à une session par initiateur")
     sub.add_parser("comfort", help="pair, témoin, groupes, QoS, audit et latence")
     rep = sub.add_parser("replicate", help="répliquer si un pair est déjà écrit")
     rep.add_argument("--follow", action="store_true")
@@ -390,6 +398,11 @@ def main(argv=None):
             from san_tui.link import CommandRunner
             from san_tui.runtime import _storage_iface
             return _print(undo_mtu(paths, CommandRunner(), _storage_iface()))
+        if args.command in {
+            "tune", "queues-undo", "uring-undo", "governor-undo",
+            "cache-undo", "preallocate-undo", "hugepages-undo", "sessions-undo",
+        }:
+            return _print(_tune(args, paths))
         if args.command == "persist-select":
             volume = _need_volume(probe, args.id)
             choice = select_support(paths, args.role, volume, args.confirm)
@@ -596,10 +609,9 @@ def _auto_boot(paths, probe):
         if candidate.is_file():
             note = candidate.read_text(encoding="utf-8")
             break
-    rtslib = "expose un paramètre" in note
-    kernel = False
-    if paths.root == Path("/"):
-        kernel = _kernel_uring()
+    from san_tui.tune import image_kernel_config, kernel_exposes, rtslib_exposes, rtslib_uring_names
+    rtslib = rtslib_exposes(rtslib_uring_names(), note)
+    kernel = kernel_exposes(image_kernel_config()) if paths.root == Path("/") else False
     seen = ""
     seen_file = paths.conf / "seen-initiators"
     if seen_file.is_file():
@@ -615,7 +627,7 @@ def _auto_boot(paths, probe):
             create_fs=create_fs if paths.root == Path("/") else None,
             cpufreq=cpufreq,
             rtslib_uring=rtslib,
-            kernel_uring=kernel and rtslib,
+            kernel_uring=kernel,
             seen_text="\n".join(
                 name for name in seen_names(seen, "iqn") if "local.san:" not in name
             ),
@@ -740,13 +752,40 @@ def _sysfs_int(path):
         return None
 
 
-def _kernel_uring():
-    import subprocess
+def _tune(args, paths):
     from pathlib import Path
-    proc = subprocess.run(["uname", "-r"], text=True, capture_output=True, check=False)
-    release = (proc.stdout or "").strip()
-    config = Path("/boot") / "config-{}".format(release)
-    if not config.is_file():
-        return False
-    text = config.read_text(encoding="utf-8", errors="ignore")
-    return "CONFIG_IO_URING=y" in text or "CONFIG_IO_URING=m" in text
+    from san_tui.tune import (
+        boot_tune,
+        undo_cache,
+        undo_governor,
+        undo_hugepages,
+        undo_preallocate,
+        undo_queues,
+        undo_sessions,
+        undo_uring,
+    )
+    live = paths.root == Path("/")
+    try:
+        if args.command == "tune":
+            return boot_tune(paths)
+        if args.command == "queues-undo":
+            return undo_queues(paths, "/sys/kernel/config/target/iscsi" if live else None)
+        if args.command == "uring-undo":
+            return undo_uring(paths, "/sys/kernel/config/target/core" if live else None)
+        if args.command == "governor-undo":
+            return undo_governor(paths)
+        if args.command == "cache-undo":
+            return undo_cache(paths, "/sys/kernel/config/target/core" if live else None)
+        if args.command == "preallocate-undo":
+            return undo_preallocate(paths)
+        if args.command == "hugepages-undo":
+            def write_pages(value):
+                if not live:
+                    return
+                Path("/proc/sys/vm/nr_hugepages").write_text("{}\n".format(int(value)), encoding="utf-8")
+            return undo_hugepages(paths, write_pages)
+        if args.command == "sessions-undo":
+            return undo_sessions(paths, "/sys/kernel/config/target/iscsi" if live else None)
+    except Exception as exc:
+        return {"ok": False, "reason": "{} : iSCSI conservé".format(exc.__class__.__name__)}
+    return {"ok": False, "reason": "commande inconnue"}

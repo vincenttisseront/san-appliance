@@ -120,7 +120,8 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-auto-boot" \
     "$ROOT/usr/local/sbin/san-auto-layout" \
     "$ROOT/usr/local/sbin/san-release-boot" \
-    "$ROOT/usr/local/sbin/san-release-health"
+    "$ROOT/usr/local/sbin/san-release-health" \
+    "$ROOT/usr/local/sbin/san-tune"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -202,7 +203,8 @@ systemctl --root="$ROOT" enable \
     san-auto.service \
     san-auto-layout.service \
     san-release-boot.service \
-    san-release-health.service
+    san-release-health.service \
+    san-tune.service
 systemctl --root="$ROOT" disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
 systemctl --root="$ROOT" mask systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
@@ -248,9 +250,21 @@ import inspect
 from pathlib import Path
 from rtslib_fb.tcm import FileIOStorageObject
 names = set(inspect.signature(FileIOStorageObject.__init__).parameters)
-text = "rtslib-fb n'expose pas de backstore io_uring sur ce noyau ; io_uring n'est pas activé."
-if "uring" in names or "io_uring" in names:
-    text = "rtslib-fb expose un paramètre io_uring."
+rts = "uring" in names or "io_uring" in names
+kernel = False
+for config in Path("/boot").glob("config-*"):
+    body = config.read_text(encoding="utf-8", errors="ignore")
+    if "CONFIG_IO_URING=y" in body or "CONFIG_IO_URING=m" in body:
+        kernel = True
+        break
+if rts and kernel:
+    text = "rtslib-fb expose un paramètre io_uring. Le noyau de l'image expose io_uring."
+elif rts:
+    text = "rtslib-fb expose un paramètre io_uring. Le noyau de l'image n'expose pas io_uring ; io_uring n'est pas activé."
+elif kernel:
+    text = "rtslib-fb n'expose pas de backstore io_uring sur ce noyau ; io_uring n'est pas activé."
+else:
+    text = "rtslib-fb n'expose pas de backstore io_uring. Le noyau de l'image n'expose pas io_uring ; io_uring n'est pas activé."
 Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
 install -d -m 0755 "$ROOT/usr/lib/san-app/image"

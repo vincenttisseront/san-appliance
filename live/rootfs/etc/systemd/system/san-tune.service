@@ -1,0 +1,11 @@
+[Unit]
+Description=Réglages iSCSI automatiques
+After=san-restore.service san-net-apply.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-tune
+
+[Install]
+WantedBy=multi-user.target
