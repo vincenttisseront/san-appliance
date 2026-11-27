@@ -17,6 +17,7 @@ if [ "$mode" = diagnostic ]; then
     systemctl mask --runtime \
         san-restore.service san-raid.service san-lvm.service \
         san-nvme.service san-ab.service san-perf.service \
+        san-auto.service san-auto-layout.service san-release-boot.service \
         >/dev/null 2>&1 || true
 fi
 

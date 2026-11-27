@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 REPO = "vincenttisseront/san-appliance"
 ASSET = "san-appliance-app.tar.gz"
 ASSET_SUM = "san-appliance-app.tar.gz.sha256"
+ASSET_SIG = "san-appliance-app.tar.gz.sha256.asc"
 API_DEFAULT = "https://api.github.com"
 MAX_BYTES = 256 * 1024 * 1024
 LISTEN = ("127.0.0.1", 9753)
@@ -54,7 +55,7 @@ def load_state(paths):
         raise ReleaseError("état des slots illisible") from exc
     if not isinstance(state, dict) or state.get("version") != 1:
         raise ReleaseError("état des slots refusé")
-    if state.get("active") not in {"a", "b"}:
+    if state.get("active") not in {"a", "b", "iso"}:
         raise ReleaseError("slot actif inconnu")
     return state
 
@@ -124,7 +125,7 @@ def extract_archive(blob, dest):
 def inactive_slot(active):
     if active == "a":
         return "b"
-    if active == "b":
+    if active in {"b", "iso"}:
         return "a"
     raise ReleaseError("slot actif inconnu")
 
@@ -146,10 +147,22 @@ def run_health(slot_dir):
     return completed.returncode
 
 
-def apply_verified(paths, archive, checksum_text, health=None):
+def apply_verified(paths, archive, checksum_text, health=None, writing=False):
     """Vérifie l'empreinte, écrit seulement le slot inactif, puis bascule une fois."""
     expected = parse_checksum(checksum_text, ASSET)
     digest = verify_archive(archive, expected)
+    if writing:
+        current = load_state(paths)["active"]
+        result = {
+            "applied": False,
+            "slot": current,
+            "previous": current,
+            "rollback": False,
+            "sha256": digest,
+            "reason": "session iSCSI en écriture",
+        }
+        append_audit(paths, result, "reporté")
+        return result
     check = health or run_health
     state = load_state(paths)
     current = state["active"]
@@ -187,23 +200,27 @@ def apply_verified(paths, archive, checksum_text, health=None):
     except Exception:
         healthy = False
     if healthy:
-        return {
+        result = {
             "applied": True,
             "slot": target,
             "previous": current,
             "rollback": False,
             "sha256": digest,
         }
+        append_audit(paths, result, "appliqué")
+        return result
     updated["active"] = current
     updated["rolled_back"] = True
     _write_state(paths, updated)
-    return {
+    result = {
         "applied": False,
         "slot": current,
         "previous": current,
         "rollback": True,
         "sha256": digest,
     }
+    append_audit(paths, result, "retour")
+    return result
 
 
 def allowed_api(api):
@@ -242,7 +259,7 @@ def read_token(path):
     return file.read_text(encoding="utf-8").strip()
 
 
-def _request(url, token, opener, accept):
+def _request(url, token, opener, accept, timeout=60):
     if token and token in url:
         raise ReleaseError("téléchargement refusé")
     headers = {"User-Agent": "san-appliance", "Accept": accept}
@@ -250,7 +267,7 @@ def _request(url, token, opener, accept):
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
     try:
-        with opener.open(req, timeout=60) as response:
+        with opener.open(req, timeout=timeout) as response:
             data = response.read(MAX_BYTES + 1)
     except (OSError, urllib.error.URLError) as exc:
         raise ReleaseError("téléchargement refusé") from exc
@@ -259,7 +276,7 @@ def _request(url, token, opener, accept):
     return data
 
 
-def fetch_release(api, tag, token, opener):
+def fetch_release(api, tag, token, opener, timeout=60):
     base = allowed_api(api)
     if tag:
         if not all(char.isalnum() or char in "._-" for char in tag) or len(tag) > 64:
@@ -267,7 +284,7 @@ def fetch_release(api, tag, token, opener):
         meta_url = "{}/repos/{}/releases/tags/{}".format(base, REPO, tag)
     else:
         meta_url = "{}/repos/{}/releases/latest".format(base, REPO)
-    raw = _request(meta_url, token, opener, "application/vnd.github+json")
+    raw = _request(meta_url, token, opener, "application/vnd.github+json", timeout)
     try:
         meta = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -278,38 +295,70 @@ def fetch_release(api, tag, token, opener):
             assets[item["name"]] = item["browser_download_url"]
     if ASSET not in assets or ASSET_SUM not in assets:
         raise ReleaseError("archive ou empreinte absente de la release")
-    for name in (ASSET, ASSET_SUM):
+    names = [ASSET, ASSET_SUM]
+    if ASSET_SIG in assets:
+        names.append(ASSET_SIG)
+    for name in names:
         if not allowed_download(assets[name], base):
             raise ReleaseError("adresse de téléchargement refusée")
-    archive = _request(assets[ASSET], token, opener, "application/octet-stream")
-    checksum = _request(assets[ASSET_SUM], token, opener, "text/plain")
+    archive = _request(assets[ASSET], token, opener, "application/octet-stream", timeout)
+    checksum = _request(assets[ASSET_SUM], token, opener, "text/plain", timeout)
     try:
         text = checksum.decode("utf-8")
     except UnicodeError as exc:
         raise ReleaseError("empreinte illisible") from exc
-    return archive, text
+    signature = None
+    if ASSET_SIG in assets:
+        try:
+            signature = _request(assets[ASSET_SIG], token, opener, "text/plain", timeout).decode("utf-8")
+        except UnicodeError as exc:
+            raise ReleaseError("signature illisible") from exc
+    return archive, text, signature
 
 
-def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None):
+def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None, writing=False, pubkey=""):
     client = opener or urllib.request.build_opener()
     try:
-        archive, checksum = fetch_release(api, tag, token, client)
+        archive, checksum, signature = fetch_release(api, tag, token, client)
     except ReleaseError:
         raise
     except Exception as exc:
         raise ReleaseError("téléchargement refusé") from exc
-    return apply_verified(paths, archive, checksum, health=health)
+    from san_tui.evolve import signature_decision
+    has_key = bool(pubkey) and Path(pubkey).is_file()
+    verified = True
+    if signature and has_key:
+        verified = _gpg_verified(checksum, signature, pubkey)
+    decision = signature_decision(bool(signature), has_key, verified)
+    if decision["blocked"]:
+        raise ReleaseError("signature refusée")
+    result = apply_verified(paths, archive, checksum, health=health, writing=writing)
+    if decision["gap"]:
+        result = dict(result)
+        result["signature"] = "non vérifiée"
+        append_audit(paths, {"slot": result.get("slot"), "sha256": result.get("sha256"), "reason": decision["gap"]}, "signature")
+    return result
 
 
 def handle_request(paths, payload, token_file="/etc/san/github.token"):
     if not isinstance(payload, dict):
         raise ReleaseError("demande refusée")
+    if payload.get("op") == "rollback":
+        return rollback_slot(paths)
     tag = payload.get("tag") or ""
     api = payload.get("api") or ""
     if not isinstance(tag, str) or not isinstance(api, str):
         raise ReleaseError("demande refusée")
+    from san_tui.evolve import session_is_writing
+    writing, why = session_is_writing(read_session_rows("/"))
+    if writing:
+        result = {"applied": False, "rollback": False, "reason": why}
+        append_audit(paths, result, "reporté")
+        return result
     token = read_token(token_file) if Path(token_file).is_file() else ""
-    result = fetch_and_apply(paths, tag=tag, api=api, token=token)
+    result = fetch_and_apply(
+        paths, tag=tag, api=api, token=token, pubkey="/etc/san/release-pubkey.asc",
+    )
     if token and token in json.dumps(result):
         raise ReleaseError("demande refusée")
     return result
@@ -347,3 +396,235 @@ def serve(paths, token_file="/etc/san/github.token"):
             conn.sendall(body)
         finally:
             conn.close()
+
+
+def append_audit(paths, event, result):
+    """Journal de mise à jour sans secret. Un échec d'écriture ne bloque pas iSCSI."""
+    try:
+        from datetime import datetime, timezone
+        from san_tui.evolve import safe_audit
+        payload = dict(event or {})
+        payload["result"] = result
+        row = safe_audit(payload)
+        row["time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path = app_dir(paths) / "audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.chmod(path, 0o644)
+    except Exception:
+        return
+
+
+def image_dir(paths):
+    return Path(paths.root) / "usr" / "lib" / "san-app" / "image"
+
+
+def installed_version(paths):
+    active = "iso"
+    try:
+        active = load_state(paths).get("active") or "iso"
+    except ReleaseError:
+        active = "iso"
+    if active == "iso":
+        path = image_dir(paths) / "version"
+    else:
+        path = app_dir(paths) / active / "version"
+        if not path.is_file():
+            path = image_dir(paths) / "version"
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def archive_version(blob):
+    try:
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+            member = next((item for item in archive.getmembers() if item.name == "version"), None)
+            if member is None:
+                return ""
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                return ""
+            return extracted.read(64).decode("utf-8", "replace").strip()
+    except (tarfile.TarError, OSError):
+        return ""
+
+
+def read_session_rows(root):
+    base = Path(root) / "sys" / "kernel" / "config" / "target" / "iscsi"
+    rows = []
+    if not base.is_dir():
+        return rows
+    for session in base.glob("*/*/acls/*/sessions/*"):
+        if not session.is_dir():
+            continue
+        out = session / "out_cmds"
+        if not out.is_file():
+            rows.append({"present": True, "out_cmds": None})
+            continue
+        text = ""
+        try:
+            text = out.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        rows.append({"present": True, "out_cmds": int(text) if text.isdigit() else None})
+    return rows
+
+
+def _gpg_verified(checksum_text, signature, pubkey):
+    if not signature or not pubkey or not Path(pubkey).is_file():
+        return False
+    try:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "checksum"
+            sig = root / "checksum.asc"
+            data.write_text(checksum_text, encoding="utf-8")
+            sig.write_text(signature, encoding="utf-8")
+            imported = subprocess.run(
+                ["gpg", "--homedir", str(root), "--batch", "--import", str(pubkey)],
+                capture_output=True, check=False,
+            )
+            if imported.returncode != 0:
+                return False
+            checked = subprocess.run(
+                ["gpg", "--homedir", str(root), "--batch", "--verify", str(sig), str(data)],
+                capture_output=True, check=False,
+            )
+            return checked.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def rollback_slot(paths, health=None):
+    """Un pas en arrière : b vers a, puis a vers l'image ISO. N'efface pas les slots."""
+    state = load_state(paths)
+    active = state.get("active")
+    if active == "b":
+        target = "a"
+        dest = app_dir(paths) / "a"
+    elif active == "a":
+        target = "iso"
+        dest = image_dir(paths)
+    else:
+        return {"applied": False, "rollback": False, "slot": active, "reason": "image ISO déjà active"}
+    if not dest.is_dir():
+        return {"applied": False, "rollback": False, "slot": active, "reason": "slot précédent absent"}
+    check = health or run_health
+    try:
+        healthy = check(dest) == 0
+    except Exception:
+        healthy = False
+    if not healthy:
+        return {"applied": False, "rollback": False, "slot": active, "reason": "slot précédent malsain"}
+    state["active"] = target
+    state["rolled_back"] = True
+    _write_state(paths, state)
+    result = {"applied": False, "rollback": True, "slot": target, "previous": active}
+    append_audit(paths, result, "retour")
+    return result
+
+
+def boot_apply(paths, opener, token="", api="", pubkey="/etc/san/release-pubkey.asc", sessions=None):
+    """Applique une release plus récente. Un échec laisse iSCSI tel quel."""
+    from san_tui.evolve import is_newer, session_is_writing, signature_decision
+    try:
+        rows = read_session_rows(paths.root) if sessions is None else sessions
+        writing, why = session_is_writing(rows)
+        if writing:
+            result = {"applied": False, "rollback": False, "reason": why}
+            append_audit(paths, result, "reporté")
+            return result
+        archive, checksum, signature = fetch_release(api, "", token, opener or urllib.request.build_opener(), timeout=20)
+        version = archive_version(archive)
+        if not is_newer(installed_version(paths), version):
+            result = {"applied": False, "rollback": False, "reason": "pas plus récent"}
+            append_audit(paths, result, "ignoré")
+            return result
+        has_key = bool(pubkey) and Path(pubkey).is_file()
+        verified = _gpg_verified(checksum, signature, pubkey) if signature and has_key else True
+        decision = signature_decision(bool(signature), has_key, verified)
+        if decision["blocked"]:
+            result = {"applied": False, "rollback": False, "reason": "signature refusée"}
+            append_audit(paths, result, "refusé")
+            return result
+        result = apply_verified(paths, archive, checksum)
+        if decision["gap"]:
+            result = dict(result)
+            result["signature"] = "non vérifiée"
+            append_audit(paths, {"slot": result.get("slot"), "sha256": result.get("sha256"), "reason": decision["gap"]}, "signature")
+        paths.ensure_runtime()
+        (paths.run / "release-applied.json").write_text(
+            json.dumps({
+                "applied": bool(result.get("applied")),
+                "previous": result.get("previous"),
+                "slot": result.get("slot"),
+            }) + "\n",
+            encoding="utf-8",
+        )
+        return result
+    except ReleaseError as exc:
+        result = {"applied": False, "rollback": False, "reason": str(exc)}
+        append_audit(paths, result, "refusé")
+        return result
+    except Exception:
+        result = {"applied": False, "rollback": False, "reason": "téléchargement refusé"}
+        append_audit(paths, result, "refusé")
+        return result
+
+
+def post_apply_health(paths, listeners, health=None):
+    """Le portail iSCSI fait partie du contrôle. Le retour ne démonte pas la cible."""
+    from san_tui.evolve import portal_problem
+    marker_path = paths.run / "release-applied.json"
+    if not marker_path.is_file():
+        return {"ok": True, "reason": "aucune release appliquée", "iscsi": "inchangé"}
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"ok": True, "reason": "marqueur illisible", "iscsi": "inchangé"}
+    if not marker.get("applied"):
+        return {"ok": True, "reason": "release non basculée", "iscsi": "inchangé"}
+    portals = []
+    exports_path = paths.conf / "exports.json"
+    if exports_path.is_file():
+        try:
+            document = json.loads(exports_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            document = {}
+        for target in document.get("targets") or []:
+            portal = target.get("portal") or {}
+            if portal.get("address"):
+                portals.append((portal["address"], int(portal.get("port") or 3260)))
+    problem = portal_problem(listeners, portals)
+    if not problem:
+        return {"ok": True, "iscsi": "inchangé"}
+    check = health or run_health
+    previous = marker.get("previous") if marker.get("previous") in {"a", "b", "iso"} else "a"
+    state = load_state(paths)
+    state["active"] = previous
+    state["rolled_back"] = True
+    _write_state(paths, state)
+    previous_dir = image_dir(paths) if previous == "iso" else app_dir(paths) / previous
+    try:
+        previous_ok = check(previous_dir) == 0
+    except Exception:
+        previous_ok = False
+    slot = previous
+    if not previous_ok:
+        image = image_dir(paths)
+        try:
+            image_ok = image.is_dir() and check(image) == 0
+        except Exception:
+            image_ok = False
+        if image_ok:
+            state["active"] = "iso"
+            _write_state(paths, state)
+            slot = "iso"
+    append_audit(paths, {"slot": slot, "reason": problem}, "retour")
+    return {"ok": False, "reason": problem, "slot": slot, "iscsi": "inchangé"}

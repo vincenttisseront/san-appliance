@@ -133,8 +133,8 @@ def note_invalid(paths, message):
     return add_alert(paths, "error", message)
 
 
-def rollback_files(paths):
-    """Reprend la sauvegarde précédente. N'invente pas une cible."""
+def rollback_files(paths, volumes=None):
+    """Reprend la sauvegarde précédente si les volumes sont encore les mêmes."""
     root = paths.conf / "backups"
     if not root.is_dir():
         raise PersistError("aucune sauvegarde")
@@ -143,6 +143,15 @@ def rollback_files(paths):
         raise PersistError("aucune sauvegarde")
     src = dirs[-1]
     exported = src / "exports.json"
+    if exported.is_file():
+        document = _read_json(exported) or {}
+        from san_tui.evolve import backup_matches
+        if document.get("targets"):
+            if volumes is None:
+                raise PersistError("volumes non comparés")
+            reason = backup_matches(document, volumes)
+            if reason:
+                raise PersistError(reason)
     if exported.is_file():
         shutil.copy2(exported, paths.conf / "exports.json")
     else:

@@ -1,0 +1,38 @@
+name: release-app
+
+# Publie l'archive lue par la mise à jour. Le jeton est GITHUB_TOKEN, fourni
+# par GitHub à l'exécution. Aucun jeton n'est écrit dans le dépôt ni dans l'ISO.
+# Pas de signature : aucune clé privée de release n'existe pour ce dépôt.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack the application archive and its checksum
+        run: scripts/pack-app-release.sh dist "${GITHUB_REF_NAME}"
+      - name: Publish the GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          notes="Archive san-appliance-app.tar.gz et empreinte .sha256. Signature non produite : aucune clé privée de release n'est dans le dépôt."
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              dist/san-appliance-app.tar.gz \
+              dist/san-appliance-app.tar.gz.sha256 \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              dist/san-appliance-app.tar.gz \
+              dist/san-appliance-app.tar.gz.sha256 \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "$notes"
+          fi

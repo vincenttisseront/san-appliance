@@ -1,0 +1,5 @@
+#!/bin/sh
+# Portail iSCSI inclus dans le contrôle. Ne démonte pas une cible déjà servie.
+set +e
+/usr/local/sbin/san-tui release-health
+exit 0

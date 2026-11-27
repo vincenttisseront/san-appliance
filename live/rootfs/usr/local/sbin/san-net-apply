@@ -43,10 +43,12 @@ def main():
         subprocess.run(["ip", "link", "set", iface, "up"], check=False)
         mtu = item.get("mtu")
         peer = item.get("peer_mtu")
+        # 9000 seulement si les deux extrémités l'annoncent.
         if mtu == 9000 and peer == 9000:
-            subprocess.run(["ip", "link", "set", iface, "mtu", "9000"], check=False)
+            chosen = "9000"
         else:
-            subprocess.run(["ip", "link", "set", iface, "mtu", "1500"], check=False)
+            chosen = "1500"
+        subprocess.run(["ip", "link", "set", iface, "mtu", chosen], check=False)
         subprocess.run(["ip", "addr", "replace", address, "dev", iface], check=False)
         print("san-net-apply: {} {} dev {}".format(role, address, iface))
 

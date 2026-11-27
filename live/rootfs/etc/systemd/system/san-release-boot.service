@@ -1,0 +1,13 @@
+[Unit]
+Description=Applique une release plus récente sans arrêter iSCSI
+After=san-restore.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-release-boot
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

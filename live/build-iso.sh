@@ -84,7 +84,11 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
-    "$ROOT/usr/local/sbin/san-release-listen"
+    "$ROOT/usr/local/sbin/san-release-listen" \
+    "$ROOT/usr/local/sbin/san-auto-boot" \
+    "$ROOT/usr/local/sbin/san-auto-layout" \
+    "$ROOT/usr/local/sbin/san-release-boot" \
+    "$ROOT/usr/local/sbin/san-release-health"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -133,7 +137,11 @@ systemctl --root="$ROOT" enable \
     san-ssh.service \
     san-webui-secrets.service \
     san-webui.service \
-    san-release.service
+    san-release.service \
+    san-auto.service \
+    san-auto-layout.service \
+    san-release-boot.service \
+    san-release-health.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -182,6 +190,10 @@ if "uring" in names or "io_uring" in names:
     text = "rtslib-fb expose un paramètre io_uring."
 Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
+install -d -m 0755 "$ROOT/usr/lib/san-app/image"
+printf '0\n' > "$ROOT/usr/lib/san-app/image/version"
+printf '%s\n' '#!/bin/sh' 'set -eu' 'test -s "$(dirname "$0")/version"' > "$ROOT/usr/lib/san-app/image/health"
+chmod 0755 "$ROOT/usr/lib/san-app/image/health"
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"

@@ -338,7 +338,11 @@ def advise(paths, fetcher=None, measurer=None, applier=None):
 
 def rollback(paths, probe, backend):
     try:
-        rollback_files(paths)
+        try:
+            volumes = probe.list_volumes()
+        except Exception:
+            volumes = []
+        rollback_files(paths, volumes)
     except PersistError as exc:
         add_alert(paths, "error", "retour arrière impossible : {}".format(exc))
         return {"exported": [], "skipped": [{"iqn": "*", "reason": str(exc)}]}
