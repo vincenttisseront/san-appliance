@@ -165,6 +165,9 @@ class SysfsProbe:
             "boot": parent in boots,
             "kind": "block",
             "pttype": self._pttype(name, block),
+            "group_id": _read(block / "san_group"),
+            "state": _read(block / "device" / "state"),
+            "io_errors": _io_errors(block),
         }
 
     def firmware(self):
@@ -294,6 +297,15 @@ def _udev_pttype(udev_root, block):
         if line.startswith("E:ID_PART_TABLE_TYPE="):
             return line.split("=", 1)[1].strip().lower()
     return ""
+
+
+def _io_errors(block):
+    raw = _read(block / "device" / "ioerr_cnt").lower()
+    if raw.startswith("0x"):
+        raw = raw[2:]
+    if not raw or any(ch not in "0123456789abcdef" for ch in raw):
+        return 0
+    return int(raw, 16)
 
 
 def _dirnames(path):

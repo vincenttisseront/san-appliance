@@ -1,0 +1,10 @@
+[Unit]
+Description=Inventaire local sur 127.0.0.1
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/san-inventory-api
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

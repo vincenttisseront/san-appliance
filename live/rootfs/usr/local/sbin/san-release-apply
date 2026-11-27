@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Applique la dernière release. Un échec laisse le slot actif et ne coupe pas iSCSI."""
+import json
+import os
+import sys
+from pathlib import Path
+
+lib = Path("/usr/lib/san-tui")
+if lib.is_dir():
+    sys.path.insert(0, str(lib))
+
+from san_tui.paths import SanPaths
+from san_tui.release import ReleaseError, fetch_and_apply
+
+
+def main():
+    raw = os.environ.get("SAN_ROOT")
+    paths = SanPaths(raw if raw else None)
+    try:
+        result = fetch_and_apply(
+            paths,
+            tag=os.environ.get("SAN_RELEASE_TAG", ""),
+            api=os.environ.get("SAN_RELEASE_API", ""),
+        )
+    except ReleaseError as exc:
+        result = {"applied": False, "error": str(exc)}
+    except Exception:
+        result = {"applied": False, "error": "téléchargement refusé"}
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.stdout.write('{"applied": false, "error": "téléchargement refusé"}\n')
+        sys.exit(0)

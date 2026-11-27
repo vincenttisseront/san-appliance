@@ -11,6 +11,7 @@ sudo
 locales
 iproute2
 ca-certificates
+openssl
 e2fsprogs
 eject
 dbus

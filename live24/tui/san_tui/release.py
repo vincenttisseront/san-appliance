@@ -13,8 +13,10 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,6 +25,7 @@ ASSET = "san-appliance-app.tar.gz"
 ASSET_SUM = "san-appliance-app.tar.gz.sha256"
 API_DEFAULT = "https://api.github.com"
 MAX_BYTES = 256 * 1024 * 1024
+WRITING_TTL = 120
 LISTEN = ("127.0.0.1", 9753)
 GITHUB_ASSET_HOSTS = {
     "github.com",
@@ -129,6 +132,166 @@ def inactive_slot(active):
     raise ReleaseError("slot actif inconnu")
 
 
+def writing_marker(paths):
+    return paths.root / "var" / "lib" / "san" / "webui" / "writing"
+
+
+def session_is_writing(paths, now=None):
+    """True seulement pendant une écriture WebUI récente. Un fichier ancien n'arrête rien."""
+    path = writing_marker(paths)
+    if not path.is_file():
+        return False
+    try:
+        stamped = path.stat().st_mtime
+    except OSError:
+        return False
+    moment = time.time() if now is None else now
+    return moment - stamped < WRITING_TTL
+
+
+def utc_stamp(clock=None):
+    if clock is not None:
+        return clock()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def read_version_text(directory):
+    path = Path(directory) / "version"
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    line = text.strip().splitlines()
+    return line[0].strip() if line else ""
+
+
+def parse_version(text):
+    if not text:
+        return None
+    raw = text[1:] if text[:1] in ("v", "V") else text
+    numbers = []
+    for part in raw.split("."):
+        if not part.isdigit():
+            return None
+        numbers.append(int(part))
+    return tuple(numbers) if numbers else None
+
+
+def version_older(incoming, current):
+    new = parse_version(incoming)
+    old = parse_version(current)
+    if new is None or old is None:
+        return False
+    return new < old
+
+
+def version_same(incoming, current):
+    new = parse_version(incoming)
+    old = parse_version(current)
+    if new is None or old is None:
+        return False
+    return new == old
+
+
+def _files(directory):
+    found = {}
+    root = Path(directory)
+    if not root.is_dir():
+        return found
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        found[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return found
+
+
+def tree_diff(old, new):
+    before = _files(old)
+    after = _files(new)
+    return {
+        "added": sorted(set(after) - set(before)),
+        "removed": sorted(set(before) - set(after)),
+        "changed": sorted(name for name in set(before) & set(after) if before[name] != after[name]),
+    }
+
+
+def render_diff(diff):
+    lines = []
+    for name in diff.get("added") or []:
+        lines.append("+ {}".format(name))
+    for name in diff.get("removed") or []:
+        lines.append("- {}".format(name))
+    for name in diff.get("changed") or []:
+        lines.append("~ {}".format(name))
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+def write_diff(paths, diff):
+    root = app_dir(paths)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "diff.txt"
+    tmp = path.with_suffix(".txt.tmp")
+    tmp.write_text(render_diff(diff), encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return path
+
+
+def newest_slot(state):
+    best = None
+    stamp = ""
+    for name in ("a", "b"):
+        info = (state.get("slots") or {}).get(name) or {}
+        installed = info.get("installed") or ""
+        if installed > stamp:
+            best = name
+            stamp = installed
+    return best
+
+
+def release_status(paths):
+    try:
+        state = load_state(paths)
+    except ReleaseError as exc:
+        return {"active": None, "newest": None, "slots": {}, "diff": "", "error": str(exc)}
+    diff_path = app_dir(paths) / "diff.txt"
+    diff = ""
+    if diff_path.is_file():
+        try:
+            diff = diff_path.read_text(encoding="utf-8")
+        except OSError:
+            diff = ""
+    return {
+        "active": state.get("active"),
+        "newest": newest_slot(state),
+        "slots": state.get("slots") or {},
+        "diff": diff,
+    }
+
+
+def undo_slot(paths):
+    """Revenir au slot précédent. C'est le seul geste manuel : il annule l'application automatique."""
+    state = load_state(paths)
+    current = state["active"]
+    previous = inactive_slot(current)
+    info = (state.get("slots") or {}).get(previous) or {}
+    slot_dir = app_dir(paths) / previous
+    if not slot_dir.is_dir() and not info.get("sha256"):
+        raise ReleaseError("pas de slot précédent")
+    state["active"] = previous
+    state["rolled_back"] = True
+    _write_state(paths, state)
+    return {
+        "applied": False,
+        "undo": True,
+        "rollback": True,
+        "slot": previous,
+        "previous": current,
+    }
+
+
 def run_health(slot_dir):
     script = Path(slot_dir) / "health"
     if not script.is_file():
@@ -146,8 +309,25 @@ def run_health(slot_dir):
     return completed.returncode
 
 
-def apply_verified(paths, archive, checksum_text, health=None):
-    """Vérifie l'empreinte, écrit seulement le slot inactif, puis bascule une fois."""
+def _kept(current, digest, diff, reason):
+    return {
+        "applied": False,
+        "deferred": False,
+        "slot": current,
+        "previous": current,
+        "rollback": False,
+        "sha256": digest,
+        "diff": render_diff(diff),
+        "reason": reason,
+    }
+
+
+def apply_verified(paths, archive, checksum_text, health=None, clock=None):
+    """Vérifie l'empreinte, montre le diff, puis bascule si personne n'écrit.
+
+    Une archive trop grande, trop ancienne, ou une empreinte fausse laisse le slot actif.
+    Le diff est écrit avant le changement de pointeur. Il ne demande pas de confirmation.
+    """
     expected = parse_checksum(checksum_text, ASSET)
     digest = verify_archive(archive, expected)
     check = health or run_health
@@ -157,6 +337,7 @@ def apply_verified(paths, archive, checksum_text, health=None):
     root = app_dir(paths)
     staging = root / (target + ".staging")
     final = root / target
+    active_dir = root / current
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
@@ -165,44 +346,67 @@ def apply_verified(paths, archive, checksum_text, health=None):
     except ReleaseError:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    incoming = read_version_text(staging)
+    active_version = read_version_text(active_dir)
+    if version_older(incoming, active_version):
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ReleaseError("release plus ancienne que le slot actif")
+    diff = tree_diff(active_dir, staging)
+    write_diff(paths, diff)
+    if session_is_writing(paths):
+        shutil.rmtree(staging, ignore_errors=True)
+        result = _kept(current, digest, diff, "session en écriture")
+        result["deferred"] = True
+        return result
+    if version_same(incoming, active_version):
+        shutil.rmtree(staging, ignore_errors=True)
+        return _kept(current, digest, diff, "déjà en place")
     if final.exists():
         shutil.rmtree(final)
     staging.rename(final)
     health_script = final / "health"
     if health_script.is_file():
         os.chmod(health_script, 0o755)
+    try:
+        healthy = check(final) == 0
+    except Exception:
+        healthy = False
+    stamp = utc_stamp(clock)
     updated = {
         "version": 1,
-        "active": target,
-        "rolled_back": False,
+        "active": target if healthy else current,
+        "rolled_back": not healthy,
         "slots": {
             "a": dict((state.get("slots") or {}).get("a") or {}),
             "b": dict((state.get("slots") or {}).get("b") or {}),
         },
     }
-    updated["slots"][target] = {"sha256": digest}
+    updated["slots"][target] = {
+        "sha256": digest,
+        "installed": stamp,
+        "version": incoming,
+    }
     _write_state(paths, updated)
-    try:
-        healthy = check(final) == 0
-    except Exception:
-        healthy = False
     if healthy:
         return {
             "applied": True,
+            "deferred": False,
             "slot": target,
             "previous": current,
             "rollback": False,
             "sha256": digest,
+            "installed": stamp,
+            "newest": newest_slot(updated),
+            "diff": render_diff(diff),
         }
-    updated["active"] = current
-    updated["rolled_back"] = True
-    _write_state(paths, updated)
     return {
         "applied": False,
+        "deferred": False,
         "slot": current,
         "previous": current,
         "rollback": True,
         "sha256": digest,
+        "diff": render_diff(diff),
     }
 
 
@@ -242,6 +446,19 @@ def read_token(path):
     return file.read_text(encoding="utf-8").strip()
 
 
+def _content_length(response):
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("Content-Length")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _request(url, token, opener, accept):
     if token and token in url:
         raise ReleaseError("téléchargement refusé")
@@ -251,7 +468,12 @@ def _request(url, token, opener, accept):
     req = urllib.request.Request(url, headers=headers)
     try:
         with opener.open(req, timeout=60) as response:
+            announced = _content_length(response)
+            if announced is not None and announced > MAX_BYTES:
+                raise ReleaseError("archive trop grande")
             data = response.read(MAX_BYTES + 1)
+    except ReleaseError:
+        raise
     except (OSError, urllib.error.URLError) as exc:
         raise ReleaseError("téléchargement refusé") from exc
     if len(data) > MAX_BYTES:
@@ -318,7 +540,7 @@ def rollback_slot(paths):
     return {"rollback": True, "slot": previous, "previous": current}
 
 
-def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None):
+def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None, clock=None):
     client = opener or urllib.request.build_opener()
     try:
         archive, checksum = fetch_release(api, tag, token, client)
@@ -326,12 +548,57 @@ def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None):
         raise
     except Exception as exc:
         raise ReleaseError("téléchargement refusé") from exc
-    return apply_verified(paths, archive, checksum, health=health)
+    return apply_verified(paths, archive, checksum, health=health, clock=clock)
+
+
+def public_asset_status(opener=None, timeout=15):
+    """Dit si la release publique GitHub contient l'archive et son empreinte."""
+    client = opener or urllib.request.build_opener()
+    url = "{}/repos/{}/releases/latest".format(API_DEFAULT, REPO)
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "san-appliance", "Accept": "application/vnd.github+json"},
+    )
+    try:
+        with client.open(req, timeout=timeout) as response:
+            raw = response.read(1024 * 1024)
+            code = getattr(response, "status", 200)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return {"present": False, "reason": "aucune release publique", "status": 404}
+        return {"present": False, "reason": "API release HTTP {}".format(exc.code), "status": exc.code}
+    except (OSError, urllib.error.URLError):
+        return {"present": False, "reason": "API release injoignable", "status": 0}
+    try:
+        meta = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return {"present": False, "reason": "release illisible", "status": code}
+    names = []
+    for item in meta.get("assets") or []:
+        if isinstance(item, dict) and item.get("name"):
+            names.append(item["name"])
+    if ASSET in names and ASSET_SUM in names:
+        return {
+            "present": True,
+            "reason": "",
+            "status": code,
+            "tag": meta.get("tag_name") or "",
+        }
+    return {
+        "present": False,
+        "reason": "archive publique absente",
+        "status": code,
+        "assets": names,
+    }
 
 
 def handle_request(paths, payload, token_file="/etc/san/github.token"):
     if not isinstance(payload, dict):
         raise ReleaseError("demande refusée")
+    if payload.get("undo") is True:
+        return undo_slot(paths)
+    if payload.get("status") is True:
+        return release_status(paths)
     tag = payload.get("tag") or ""
     api = payload.get("api") or ""
     if not isinstance(tag, str) or not isinstance(api, str):
