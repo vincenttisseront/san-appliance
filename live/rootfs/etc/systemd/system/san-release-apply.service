@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply a newer GitHub release when nobody is writing
+After=san-restore.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-release-apply
+
+[Install]
+WantedBy=multi-user.target
