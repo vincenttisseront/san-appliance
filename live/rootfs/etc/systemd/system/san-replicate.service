@@ -1,0 +1,12 @@
+[Unit]
+Description=Réplication asynchrone si un pair est déjà configuré
+After=san-restore.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/san-replicate
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

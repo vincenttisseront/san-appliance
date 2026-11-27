@@ -1,0 +1,12 @@
+[Unit]
+Description=Métriques Prometheus sur l'adresse d'administration
+After=san-net-apply.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/san-metrics
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

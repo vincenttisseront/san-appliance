@@ -11,6 +11,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
 import crypto from 'node:crypto'
+import { auditResponse } from './audit-route.mjs'
 import { SESSION_SECONDS, capSetCookie, createSession, readCookie, sessionCookie, touchSession } from './session.mjs'
 import { newestSlot } from './status.mjs'
 
@@ -78,6 +79,7 @@ function page() {
 <h2>Diff</h2>
 <pre id="diff">${escapeHtml(diff)}</pre>
 <p><a href="/appliance-config">Télécharger la configuration</a></p>
+<p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
 <p><button id="undo" type="button">Revenir au slot précédent</button></p>
 <pre id="out"></pre>
 </main>
@@ -235,6 +237,16 @@ const server = https.createServer({ key, cert }, async (req, res) => {
     res.on('close', endWrite)
   }
   try {
+    if (pathOnly === '/appliance-audit' && req.method === 'GET') {
+      const answer = auditResponse(process.env.SAN_AUDIT_FILE || '/run/san/audit-export.json')
+      for (const [key, value] of Object.entries(answer.headers || {})) {
+        res.setHeader(key, value)
+      }
+      applySession(res, session, ended)
+      res.writeHead(answer.status)
+      res.end(answer.body)
+      return
+    }
     if (pathOnly === '/appliance-update' && req.method === 'GET') {
       applySession(res, session, ended)
       send(res, 200, page(), 'text/html; charset=utf-8')

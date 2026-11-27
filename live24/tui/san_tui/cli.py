@@ -76,11 +76,40 @@ def main(argv=None):
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
+    sub.add_parser("comfort", help="pair, témoin, groupes, QoS, audit et latence")
+    rep = sub.add_parser("replicate", help="répliquer si un pair est déjà écrit")
+    rep.add_argument("--follow", action="store_true")
+    sub.add_parser("replicate-stop", help="suspendre la réplication")
+    sub.add_parser("replicate-resume", help="reprendre la réplication automatique")
+    sub.add_parser("witness", help="interroger le témoin, ou rester local")
+    sub.add_parser("witness-stay", help="annuler une bascule et rester sur le slot local")
+    sub.add_parser("witness-resume", help="laisser de nouveau le témoin décider")
+    sub.add_parser("snapshot-groups", help="instantané des LUN qui partagent déjà un groupe")
+    sub.add_parser("qos-apply", help="appliquer le profil de volume déjà présent")
+    sub.add_parser("audit-prepare", help="préparer l'export d'audit signé")
+    sub.add_parser("inventory-api", help="inventaire sur 127.0.0.1")
+    sub.add_parser("inventory-stop", help="arrêter l'inventaire local")
+    sub.add_parser("inventory-resume", help="rétablir l'inventaire local")
+    sub.add_parser("metrics", help="métriques sur l'adresse d'administration")
+    sub.add_parser("metrics-stop", help="arrêter les métriques")
+    sub.add_parser("metrics-resume", help="rétablir les métriques")
+    sub.add_parser("latency-check", help="alerter si le p99 dépasse le banc")
+    sub.add_parser("retire", help="retirer un disque de données en échec")
+    sub.add_parser("retire-undo", help="annuler le retrait automatique")
 
     args = parser.parse_args(argv)
     paths = SanPaths(args.root)
     probe = CommandProbe()
     try:
+        if args.command in {
+            "comfort", "replicate", "replicate-stop", "replicate-resume",
+            "witness", "witness-stay", "witness-resume", "snapshot-groups",
+            "qos-apply", "audit-prepare", "inventory-api", "inventory-stop",
+            "inventory-resume", "metrics", "metrics-stop", "metrics-resume",
+            "latency-check", "retire", "retire-undo",
+        }:
+            from san_tui.comfort import main_command
+            return main_command(args, paths, probe)
         if args.command in (None, "tui"):
             from san_tui.ui import run_tui
             return run_tui(paths, probe)
