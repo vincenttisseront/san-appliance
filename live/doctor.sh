@@ -112,8 +112,10 @@ print(packages_sha256(Path(os.environ["SAN_INRELEASE"]).read_text(encoding="utf-
     }
     rm -f "$rel" "$err"
     base=${url%/InRelease}
+    # The plain Packages.gz path can lag the signed InRelease. The by-hash
+    # object is the file that signature names.
     curl -4 -fsSL --max-time 60 --retry 3 --retry-delay 2 \
-        "$base/main/binary-amd64/Packages.gz" -o "$pkg"
+        "$base/main/binary-amd64/by-hash/SHA256/$sha" -o "$pkg"
     printf '%s  %s\n' "$sha" "$pkg" | sha256sum -c - >/dev/null \
         || { rm -f "$pkg"; fail "Packages.gz hash mismatch for ${name}"; }
     found=$(gzip -dc "$pkg" | SAN_PIN_STREAM=1 PYTHONPATH="$REPO_ROOT/live24/tui" python3 -c '
