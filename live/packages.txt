@@ -24,6 +24,7 @@ open-iscsi
 mdadm
 lvm2
 openssh-server
+rsyslog
 fio
 ethtool
 nvme-cli

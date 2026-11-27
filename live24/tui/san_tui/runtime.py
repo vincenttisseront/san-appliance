@@ -17,19 +17,10 @@ from san_tui.medium import accept_ollama_env, evaluate
 from san_tui.nvme import NvmeError, subsystem_problem
 from san_tui.ollama import decide, fetch_once, rollback_needed
 from san_tui.perf import assert_kept_safe, render_table
+from san_tui.mode import diagnostic, enter_diagnostic, refuse_invalid_exports
 from san_tui.persist import PersistError, _read_json, _write_json, load_choice, rollback_files
 from san_tui.raid import RaidError, plan_assemble
 from san_tui.toram import decide as toram_decide
-
-
-def diagnostic(paths):
-    if paths.root != Path("/"):
-        flag = paths.run / "mode"
-        if flag.is_file():
-            return flag.read_text(encoding="utf-8").strip() == "diagnostic"
-        return False
-    mode = Path("/run/san-live/mode")
-    return mode.is_file() and mode.read_text(encoding="utf-8").strip() == "diagnostic"
 
 
 def bind_medium(paths, probe):
@@ -66,12 +57,14 @@ def bind_medium(paths, probe):
         reason = "support de conf illisible : {}".format(exc)
         _state(state_path, False, reason)
         add_alert(paths, "error", reason)
+        enter_diagnostic(paths, reason)
         return {"ok": False, "reason": reason}
     reason = evaluate(stamp, device)
     if reason:
         _umount(probe_dir)
         _state(state_path, False, reason)
         add_alert(paths, "error", reason)
+        enter_diagnostic(paths, reason)
         return {"ok": False, "reason": reason}
     _umount(probe_dir)
     paths.conf.mkdir(parents=True, exist_ok=True)
@@ -90,6 +83,8 @@ def bind_medium(paths, probe):
             os.chmod(target, 0o600)
         else:
             add_alert(paths, "error", "ollama.env refusé : seule SAN_OLLAMA_ENDPOINT est admise")
+    if refuse_invalid_exports(paths):
+        add_alert(paths, "info", "diagnostic : inventaire seulement, pas d'export")
     _state(state_path, True, "identifiant conforme")
     return {"ok": True, "id": device.get("id"), "reason": "identifiant conforme"}
 

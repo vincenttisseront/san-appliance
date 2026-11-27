@@ -49,8 +49,13 @@ if grep -Eiq 'menuentry ".*install' "$grub"; then
 fi
 ok "GRUB default is live, diagnostic is separate, no installer"
 
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/apt-pin.sh"
+PIN_FILE=$SCRIPT_DIR/apt-pins.sha256
+DECISION_FILE=$SCRIPT_DIR/apt-decisions.txt
+
 verify() {
-    local url=$1 name=$2 tmp err sha
+    local url=$1 name=$2 tmp err sha pin_status
     tmp=$(mktemp)
     err=$(mktemp)
     curl -4 -fsSL --max-time 30 --retry 3 --retry-delay 2 "$url" -o "$tmp"
@@ -61,6 +66,16 @@ verify() {
     fi
     sha=$(sha256sum "$tmp" | awk '{print $1}')
     rm -f "$tmp" "$err"
+    set +e
+    apt_pin_check "$PIN_FILE" "$DECISION_FILE" "$name" "$sha"
+    pin_status=$?
+    set -e
+    if [ "$pin_status" -eq 2 ]; then
+        fail "APT signature changed for ${name} without an explicit decision"
+    fi
+    if [ "$pin_status" -ne 0 ]; then
+        fail "APT pin missing for ${name}"
+    fi
     ok "APT signature OK ${name} sha256=${sha}"
 }
 

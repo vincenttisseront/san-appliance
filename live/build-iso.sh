@@ -67,11 +67,13 @@ install_sh=$REPO_ROOT/live24/tui/install.sh
 "$install_sh" "$ROOT"
 "$SCRIPT_DIR/install-webui.sh" "$ROOT"
 install -m 0644 "$SCRIPT_DIR/webui/front.mjs" "$ROOT/usr/lib/san-webui/front.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/guard.mjs" "$ROOT/usr/lib/san-webui/guard.mjs"
 install -m 0644 "$SCRIPT_DIR/webui/audit-route.mjs" "$ROOT/usr/lib/san-webui/audit-route.mjs"
 install -m 0644 "$SCRIPT_DIR/webui/session.mjs" "$ROOT/usr/lib/san-webui/session.mjs"
 install -m 0644 "$SCRIPT_DIR/webui/status.mjs" "$ROOT/usr/lib/san-webui/status.mjs"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
+cp -a "$REPO_ROOT/docs/rollback.md" "$ROOT/usr/share/san/rollback.txt"
 chmod 0755 \
     "$ROOT/usr/local/sbin/san-live-boot" \
     "$ROOT/usr/local/sbin/san-conf-bind" \
@@ -87,7 +89,9 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
+    "$ROOT/usr/local/sbin/san-webui-roles" \
     "$ROOT/usr/local/sbin/san-webui-cert" \
+    "$ROOT/usr/local/sbin/san-syslog" \
     "$ROOT/usr/local/sbin/san-release-listen" \
     "$ROOT/usr/local/sbin/san-release-apply" \
     "$ROOT/usr/local/sbin/san-comfort" \
@@ -142,9 +146,11 @@ systemctl --root="$ROOT" enable \
     san-ollama.service \
     san-ssh.service \
     san-webui-secrets.service \
+    san-webui-roles.service \
     san-webui-cert.service \
     san-webui.service \
     san-release.service \
+    san-syslog.service \
     san-release-apply.service \
     san-factory.service \
     san-config-import.service \
@@ -207,6 +213,9 @@ PY
 [ ! -e "$ROOT/var/lib/san/webui/tls/key.pem" ] || die "webui private key is baked into the image"
 [ ! -e "$ROOT/etc/san/factory" ] || die "factory marker is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
+[ ! -e "$ROOT/run/san/webui-roles.json" ] || die "WebUI role passwords are baked into the image"
+[ ! -e "$ROOT/etc/san/syslog.json" ] || die "a syslog target is baked into the image"
+[ ! -e "$ROOT/etc/rsyslog.d/99-san-remote.conf" ] || die "a syslog forwarder is baked into the image"
 [ ! -e "$ROOT/var/lib/san/conf/audit.key" ] || die "an audit key is baked into the image"
 [ ! -e "$ROOT/etc/san/audit.key" ] || die "an audit key is baked into the image"
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"

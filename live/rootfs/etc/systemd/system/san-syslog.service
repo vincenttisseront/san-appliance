@@ -1,0 +1,12 @@
+[Unit]
+Description=Syslog distant optionnel
+After=san-conf-bind.service
+# Pas avant san-restore : un syslog absent ne doit pas retarder iSCSI.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-syslog
+
+[Install]
+WantedBy=multi-user.target

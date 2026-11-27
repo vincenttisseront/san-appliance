@@ -75,6 +75,11 @@ def main(argv=None):
     sub.add_parser("factory", help="effacer la conf si le marqueur usine est présent")
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
+    sub.add_parser("release-rollback", help="revenir au slot d'application précédent")
+    sub.add_parser("boot-inventory", help="écrire une fois l'inventaire disques, cartes et firmware")
+    sub.add_parser("syslog-apply", help="relayer le syslog s'il répond, sinon garder les journaux locaux")
+    sub.add_parser("syslog-local", help="annuler le syslog distant")
+    sub.add_parser("webui-unlock", help="lever le verrou de la WebUI")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
     sub.add_parser("comfort", help="pair, témoin, groupes, QoS, audit et latence")
     rep = sub.add_parser("replicate", help="répliquer si un pair est déjà écrit")
@@ -195,6 +200,32 @@ def main(argv=None):
             from san_tui.runtime import rollback
             backend = RecordingBackend() if os.environ.get("SAN_DRY_RUN") == "1" else RtslibBackend()
             return _print(rollback(paths, probe, backend))
+        if args.command == "release-rollback":
+            from san_tui.release import rollback_slot
+            return _print(rollback_slot(paths))
+        if args.command == "boot-inventory":
+            from san_tui.probe import write_boot_inventory
+            try:
+                return _print(write_boot_inventory(paths, probe))
+            except Exception:
+                return _print({
+                    "disks": [],
+                    "nics": [],
+                    "firmware": {},
+                    "exports": [],
+                    "reason": "inventaire incomplet",
+                })
+        if args.command == "syslog-apply":
+            from san_tui.syslog import apply_remote
+            try:
+                return _print(apply_remote(paths))
+            except Exception:
+                return _print({"remote": False, "local": True, "reason": "erreur interne"})
+        if args.command == "syslog-local":
+            from san_tui.syslog import disable_remote
+            return _print(disable_remote(paths))
+        if args.command == "webui-unlock":
+            return _print(_unlock_webui(paths))
         if args.command == "toram-measure":
             from san_tui.runtime import measure_toram
             return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
@@ -284,6 +315,13 @@ def _squash_bytes():
         except (OSError, ValueError):
             continue
     return 0
+
+
+def _unlock_webui(paths):
+    path = paths.root / "var" / "lib" / "san" / "webui" / "lock.json"
+    if path.is_file():
+        path.unlink()
+    return {"locked": False}
 
 
 def _print(payload):

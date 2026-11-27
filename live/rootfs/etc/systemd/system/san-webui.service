@@ -1,8 +1,8 @@
 [Unit]
 Description=SAN WebUI (loopback only)
-After=network-online.target san-webui-secrets.service san-webui-cert.service san-release.service
+After=network-online.target san-webui-secrets.service san-webui-roles.service san-webui-cert.service san-release.service
 Requires=san-webui-secrets.service
-Wants=network-online.target san-release.service san-webui-cert.service
+Wants=network-online.target san-webui-roles.service san-webui-cert.service san-release.service
 
 [Service]
 Type=simple

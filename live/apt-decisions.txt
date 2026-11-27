@@ -1,0 +1,4 @@
+# Décision explicite quand une signature APT épinglée change.
+# Une ligne utile a trois champs : suite, sha256 du nouvel InRelease, motif.
+# Exemple :
+# noble-updates <sha256> archive-ubuntu-2026-12-01

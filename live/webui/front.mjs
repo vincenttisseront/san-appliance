@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process'
 import net from 'node:net'
 import crypto from 'node:crypto'
 import { auditResponse } from './audit-route.mjs'
+import { handleAppliance } from './guard.mjs'
 import { SESSION_SECONDS, capSetCookie, createSession, readCookie, sessionCookie, touchSession } from './session.mjs'
 import { newestSlot } from './status.mjs'
 
@@ -74,7 +75,7 @@ function page() {
 <body>
 <main>
 <h1>Mise à jour de l'application</h1>
-<p>La release plus récente est appliquée toute seule quand aucune session n'écrit. Le diff est là pour être lu. Le slot le plus récent est marqué. Le bouton ci-dessous annule seulement le dernier choix.</p>
+<p>La release plus récente est appliquée toute seule quand aucune session n'écrit. Le diff est là pour être lu. Le slot le plus récent est marqué. Une demande de release depuis cette page exige le compte release. Le bouton ci-dessous annule seulement le dernier choix.</p>
 <ul>${rows}</ul>
 <h2>Diff</h2>
 <pre id="diff">${escapeHtml(diff)}</pre>
@@ -208,6 +209,26 @@ function askUpdater(body) {
   })
 }
 
+const ROLES_PATH = process.env.SAN_WEBUI_ROLES || '/run/san/webui-roles.json'
+const LOCK_PATH = process.env.SAN_WEBUI_LOCK || '/var/lib/san/webui/lock.json'
+
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return fallback
+  }
+}
+
+function writeLock(lock) {
+  try {
+    fs.mkdirSync(LOCK_PATH.replace(/\/[^/]+$/, ''), { recursive: true })
+    fs.writeFileSync(LOCK_PATH, JSON.stringify(lock) + '\n', { mode: 0o640 })
+  } catch {
+    // Un verrou illisible ne doit pas arrêter la page, ni iSCSI.
+  }
+}
+
 let key
 let cert
 try {
@@ -307,6 +328,19 @@ const server = https.createServer({ key, cert }, async (req, res) => {
         if (parsed.undo === true) {
           payload = JSON.stringify({ undo: true })
         } else {
+          const decision = handleAppliance({
+            method: 'POST',
+            authorization: req.headers.authorization,
+            roles: readJson(ROLES_PATH, {}),
+            lock: readJson(LOCK_PATH, {}),
+            now: Date.now(),
+          })
+          writeLock(decision.lock)
+          if (!decision.allow) {
+            applySession(res, session, ended)
+            send(res, decision.status, JSON.stringify({ applied: false, error: decision.error || 'refusé' }) + '\n', 'application/json; charset=utf-8')
+            return
+          }
           payload = JSON.stringify({ tag: parsed.tag || '', api: parsed.api || '' })
         }
       } catch {

@@ -10,7 +10,7 @@ make iso
 
 `mtools` fournit `mformat`, exigé par `make doctor` : `grub-mkrescue` s'en sert pour l'image UEFI.
 
-`make doctor` vérifie l'hôte Ubuntu 24.04 amd64, les outils, le menu GRUB, et les signatures APT (`InRelease` de noble, noble-updates, noble-security) avec le trousseau Ubuntu. `make iso` produit dans `dist/` :
+`make doctor` vérifie l'hôte Ubuntu 24.04 amd64, les outils, le menu GRUB, et les signatures APT (`InRelease` de noble, noble-updates, noble-security) avec le trousseau Ubuntu. Les empreintes sont épinglées dans `live/apt-pins.sha256`. Si une signature change, `make doctor` échoue tant qu'une ligne de `live/apt-decisions.txt` n'accepte pas explicitement la nouvelle empreinte. `make iso` produit dans `dist/` :
 
 - `san-appliance-live-24.04-amd64.iso`
 - `san-appliance-live-24.04-amd64.iso.sha256`

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Relais optionnel. S'il échoue, les journaux restent locaux et iSCSI continue.
+/usr/local/sbin/san-tui syslog-apply || true
+exit 0
