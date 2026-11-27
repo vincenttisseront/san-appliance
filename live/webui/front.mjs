@@ -15,7 +15,7 @@ import { auditResponse } from './audit-route.mjs'
 import { handleAppliance } from './guard.mjs'
 import { SESSION_SECONDS, capSetCookie, createSession, readCookie, sessionCookie, touchSession } from './session.mjs'
 import { newestSlot } from './status.mjs'
-import { renderChannels, renderLatency, renderScsi } from './boards.mjs'
+import { renderChannels, renderLatency, renderPerf, renderScsi } from './boards.mjs'
 
 const testMode = process.env.SAN_FRONT_TEST === '1'
 const listenPort = Number(process.env.SAN_FRONT_PORT || 3000)
@@ -86,6 +86,7 @@ function page() {
 <p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
 <p><a href="/scsi-errors">Erreurs SCSI</a></p>
 <p><a href="/latency">Latence</a></p>
+<p><a href="/perf">IOPS et p99</a></p>
 <p><a href="/channels">Canaux</a></p>
 <p><a href="/exports">Exports iSCSI</a> · <a href="/nvme">NVMe-oF</a></p>
 <p><button id="undo" type="button">Revenir au slot précédent</button></p>
@@ -361,6 +362,12 @@ const server = https.createServer({ key, cert }, async (req, res) => {
       const board = process.env.SAN_LATENCY_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'latency.json')
       applySession(res, session, ended)
       send(res, 200, renderLatency(readJson(board, { global_p99_us: null, luns: [] })), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/perf' && req.method === 'GET') {
+      const board = process.env.SAN_PERF_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'perf.json')
+      applySession(res, session, ended)
+      send(res, 200, renderPerf(readJson(board, { table: '' })), 'text/html; charset=utf-8')
       return
     }
     if (pathOnly === '/channels' && req.method === 'GET') {

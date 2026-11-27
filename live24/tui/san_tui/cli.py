@@ -64,6 +64,8 @@ def main(argv=None):
     sub.add_parser("lvm-activate", help="activer les groupes explicitement enregistrés")
     sub.add_parser("nvme-restore", help="exporter le NVMe-oF enregistré")
     sub.add_parser("perf-apply", help="appliquer le seul réglage mesuré, s'il existe")
+    sub.add_parser("block-tune", help="poser les réglages bloc, un par un")
+    sub.add_parser("block-undo", help="retirer les réglages bloc automatiques")
     sub.add_parser("ab-apply", help="écrire le slot inactif si une mise à jour est en attente")
     release_p = sub.add_parser("channels-sync", help="appliquer les canaux app et noyau, sans formulaire")
     release_p.add_argument("--api", default="")
@@ -107,7 +109,8 @@ def main(argv=None):
     sub.add_parser("clone-auto", help="cloner le LUN vers le seul volume libre")
     sub.add_parser("clone-undo", help="retirer le clone automatique")
     sub.add_parser("thin-auto", help="pool thin, alerte, réserve")
-    sub.add_parser("crypt-auto", help="ouvrir ou chiffrer, clé hors de l'ISO")
+    sub.add_parser("crypt-auto", help="laisser le chemin rapide sans chiffrement")
+    sub.add_parser("crypt-undo", help="fermer un mapper encore ouvert sur le chemin rapide")
     sub.add_parser("chap-rotate", help="tourner le CHAP sans couper les sessions")
     sub.add_parser("chap-undo", help="reposer le secret CHAP précédent")
     sub.add_parser("portal-once", help="ouvrir le portail de secours si le lien est tombé")
@@ -199,8 +202,26 @@ def main(argv=None):
             backend = RecordingNvme() if os.environ.get("SAN_DRY_RUN") == "1" else ConfigfsNvme()
             return _print(restore_nvme(paths, probe, backend))
         if args.command == "perf-apply":
+            from san_tui.blocktune import write_perf_table
             from san_tui.runtime import MeasuredWriter, apply_measured
-            return _print(apply_measured(paths, MeasuredWriter()))
+            result = apply_measured(paths, MeasuredWriter())
+            try:
+                result["table"] = write_perf_table(paths)
+            except Exception:
+                result["table"] = {"written": False, "iscsi": "unchanged"}
+            return _print(result)
+        if args.command == "block-tune":
+            from san_tui.blocktune import apply_tuning
+            try:
+                return _print(apply_tuning(paths, probe))
+            except Exception as exc:
+                return _print({"iscsi": "unchanged", "reason": exc.__class__.__name__})
+        if args.command == "block-undo":
+            from san_tui.blocktune import undo as undo_block
+            try:
+                return _print(undo_block(paths))
+            except Exception as exc:
+                return _print({"iscsi": "unchanged", "reason": exc.__class__.__name__})
         if args.command == "ab-apply":
             from san_tui.runtime import run_ab
             return _print(run_ab(paths, probe))
@@ -438,7 +459,7 @@ def _print(payload):
 
 _AUTO_COMMANDS = {
     "quota-apply", "quota-undo", "snapshot-auto", "snapshot-rollback",
-    "clone-auto", "clone-undo", "thin-auto", "crypt-auto",
+    "clone-auto", "clone-undo", "thin-auto", "crypt-auto", "crypt-undo",
     "chap-rotate", "chap-undo", "portal-once", "portal-watch", "portal-undo",
     "lacp-auto", "lacp-undo",
 }
@@ -469,6 +490,9 @@ def _auto(args, paths, probe):
     if args.command == "crypt-auto":
         from san_tui.luks import prepare
         return prepare(paths, probe)
+    if args.command == "crypt-undo":
+        from san_tui.luks import close_fast_path
+        return {"closed": close_fast_path(paths), "encryption": "hors du chemin rapide", "iscsi": "unchanged"}
     if args.command == "chap-rotate":
         from san_tui.chap import rotate
         return rotate(paths)

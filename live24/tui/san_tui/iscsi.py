@@ -562,13 +562,10 @@ def _prepare_lio():
 
 
 def _apply_measured_iscsi(tpg):
-    """Pose un réglage iSCSI seulement s'il est le réglage unique du banc."""
+    """Le digest suit le banc. La rafale est posée plus tard, et seulement si le banc bouge."""
     try:
         change = _measured_change()
-        if change.get("burst") == "64k":
-            tpg.set_parameter("ImmediateData", "Yes")
-            tpg.set_parameter("FirstBurstLength", "65536")
-        elif change.get("digest") == "crc32c":
+        if change.get("digest") == "crc32c":
             tpg.set_parameter("HeaderDigest", "CRC32C")
             tpg.set_parameter("DataDigest", "CRC32C")
     except Exception:

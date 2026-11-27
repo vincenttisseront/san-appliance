@@ -49,6 +49,19 @@ export function renderLatency(board) {
 `)
 }
 
+export function renderPerf(board) {
+  const lines = String(board?.table || '').trim().split('\n').filter((line) => line.length > 0)
+  const rows = lines.map((line) => {
+    const cells = line.split('\t').map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')
+    return `<tr>${cells}</tr>`
+  }).join('')
+  return page('IOPS et p99', `
+<h1>IOPS et p99</h1>
+<p>Le tableau est écrit au démarrage.</p>
+<table>${rows}</table>
+`)
+}
+
 export function renderChannels(status) {
   const channels = status?.channels || {}
   const blocks = ['app', 'kernel'].map((name) => {

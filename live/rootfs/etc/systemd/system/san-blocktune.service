@@ -1,0 +1,11 @@
+[Unit]
+Description=Réglages bloc automatiques, un par un
+After=san-restore.service san-perf.service san-comfort.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-blocktune
+
+[Install]
+WantedBy=multi-user.target

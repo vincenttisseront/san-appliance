@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderChannels, renderLatency, renderScsi } from './boards.mjs'
+import { renderChannels, renderLatency, renderPerf, renderScsi } from './boards.mjs'
 
 test('scsi page drops the payload', () => {
   const token = 'PAYLOADDEADBEEF00112233445566778899'
@@ -33,6 +33,16 @@ test('latency page shows the global number and each lun', () => {
   assert.equal(html.includes('iqn.2026-11.local.san:one'), true)
   assert.equal(html.includes('iqn.2026-11.local.san:two'), true)
   assert.equal(html.includes('OSError'), true)
+})
+
+test('perf page is the measured table and has no button', () => {
+  const html = renderPerf({
+    table: 'réglage\tcharge\tiops\tp99_us\tdébit_o/s\tcpu_par_go\tgardé\nbaseline\tread\t1000\t40\t100\t1\tnon\n',
+  })
+  assert.equal(html.includes('1000'), true)
+  assert.equal(html.includes('40'), true)
+  assert.equal(html.includes('<button'), false)
+  assert.equal(html.includes('<form'), false)
 })
 
 test('channel page has no version field', () => {
