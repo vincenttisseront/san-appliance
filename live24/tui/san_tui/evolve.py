@@ -11,12 +11,12 @@ from san_tui.redact import SECRET_KEYS, redact
 
 MIN_DATA_BYTES = 512 * 1024 * 1024
 SIGNING_GAP = (
-    "Aucune clé de signature n'existe dans cet environnement et aucune n'est "
-    "créée dans le dépôt. L'appliance vérifie le fichier d'empreinte détaché "
-    "san-appliance-app.tar.gz.sha256 avant d'écrire un slot. Une signature "
-    "détachée san-appliance-app.tar.gz.sha256.asc n'est contrôlée que si "
-    "l'opérateur a déposé une clé publique dans /etc/san/release-pubkey.asc, "
-    "hors de l'ISO. Sans cette clé, la signature n'est pas vérifiée."
+    "La clé de signature est créée au runtime sur le disque data, hors de "
+    "l'ISO. La clé privée n'entre pas dans l'image. Avant de basculer le "
+    "pointeur de slot, l'appliance vérifie la signature détachée de "
+    "l'empreinte. Une signature GPG san-appliance-app.tar.gz.sha256.asc "
+    "n'est contrôlée que si l'opérateur a déposé une clé publique dans "
+    "/etc/san/release-pubkey.asc, hors de l'ISO."
 )
 
 _PART = re.compile(r"^(?:nvme\d+n\d+p\d+|mmcblk\d+p\d+|(?:sd|vd|xvd|hd)[a-z]+\d+)$")

@@ -236,7 +236,7 @@ class GuardTests(unittest.TestCase):
         gap = signature_decision(False, False, False)
         self.assertFalse(gap["checked"])
         self.assertFalse(gap["blocked"])
-        self.assertIn("Aucune clé", gap["gap"])
+        self.assertIn("hors de l'ISO", gap["gap"])
         self.assertEqual(gap["gap"], SIGNING_GAP)
         blocked = signature_decision(True, True, False)
         self.assertTrue(blocked["blocked"])
@@ -323,7 +323,14 @@ class ReleaseBootTests(unittest.TestCase):
         result = boot_apply(self.paths, Opener(), api="http://127.0.0.1:8765", sessions=[])
         self.assertTrue(result["applied"])
         self.assertEqual(result["slot"], "b")
-        self.assertEqual(result.get("signature"), "non vérifiée")
+        self.assertEqual(result.get("signature"), "vérifiée")
+        self.assertTrue(result.get("signed"))
+        private = self.paths.data / "release-key.pem"
+        self.assertTrue(private.is_file())
+        self.assertEqual(private.stat().st_mode & 0o077, 0)
+        self.assertTrue((self.paths.data / "release-checksum.sig").is_file())
+        image = self.paths.root / "usr" / "lib" / "san-app" / "image"
+        self.assertFalse((image / "release-key.pem").exists())
         (self.paths.conf / "exports.json").write_text(json.dumps({
             "version": 1,
             "targets": [{"portal": {"address": "10.1.0.10", "port": 3260}, "iqn": "iqn.x"}],

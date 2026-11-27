@@ -152,6 +152,20 @@ class FabricTests(unittest.TestCase):
         self.assertTrue(measured["pass"])
         self.assertGreater(measured["p99_us"], 0)
 
+    def test_a_refused_signature_does_not_move_the_slot(self):
+        blob, text = archive({"health": "#!/bin/sh\nexit 0\n", "version": "2\n"})
+        result = apply_verified(
+            self.paths, blob, text, health=lambda _slot: 0, gate=RecordingGate(),
+            bench=lambda: {"pass": True, "p99_us": 5},
+            signer=lambda *_args: ("", "signature refusée"),
+        )
+        self.assertFalse(result["applied"])
+        self.assertEqual(result["reason"], "signature refusée")
+        self.assertEqual(result["slot"], "a")
+        state = json.loads((self.paths.conf / "app" / "state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["active"], "a")
+        self.assertEqual((self.paths.run / "iscsi-serving").read_text(encoding="utf-8"), "up\n")
+
     def test_signature_roundtrip_and_gap_does_not_block(self):
         blob, text = archive({"health": "#!/bin/sh\nexit 0\n", "version": "2\n"})
         result = apply_verified(

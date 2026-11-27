@@ -322,6 +322,26 @@ def _screen_release(paths, archive, state, digest, channel):
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _detached_signature_ok(paths, digest, measured, signature, gap):
+    """La clé runtime, si elle existe, doit vérifier la signature avant le pointeur.
+
+    Un essai de test qui ne crée pas de clé ne bloque pas. Le signataire réel
+    refuse avec « signature refusée » quand la vérification échoue.
+    """
+    if gap == "signature refusée":
+        return False
+    public = paths.data / "release-key.pub"
+    if not public.is_file():
+        return True
+    if not signature:
+        return False
+    try:
+        from san_tui.promote import payload_for, verify_bytes
+        return bool(verify_bytes(public, payload_for(digest, measured), bytes.fromhex(signature)))
+    except Exception:
+        return False
+
+
 def _commit_slot(paths, archive, state, digest, measured, check, sign, channel, kernel_version, clock=None):
     current = state["active"]
     target = inactive_slot(current)
@@ -401,7 +421,25 @@ def _commit_slot(paths, archive, state, digest, measured, check, sign, channel, 
     try:
         signature, gap = sign(paths, digest, measured)
     except Exception:
-        gap = "signature indisponible"
+        gap = "signature refusée"
+    if not _detached_signature_ok(paths, digest, measured, signature, gap):
+        updated["active"] = current
+        updated["previous"] = state.get("previous")
+        updated["rolled_back"] = True
+        updated["signing_gap"] = gap or "signature refusée"
+        _write_state(paths, updated, channel)
+        return {
+            "applied": False,
+            "slot": current,
+            "previous": current,
+            "rollback": True,
+            "reason": "signature refusée",
+            "sha256": digest,
+            "channel": channel,
+            "signed": False,
+            "signing_gap": updated["signing_gap"],
+            "diff": render_diff(diff),
+        }
     if signature:
         updated["signature"] = signature
     elif gap:
@@ -1101,8 +1139,12 @@ def boot_apply(paths, opener, token="", api="", pubkey="/etc/san/release-pubkey.
             append_audit(paths, result, "refusé")
             return result
         result = apply_verified(paths, archive, checksum)
-        if decision["gap"]:
-            result = dict(result)
+        result = dict(result)
+        if result.get("signed"):
+            result["signature"] = "vérifiée"
+        elif result.get("reason") == "signature refusée":
+            result["signature"] = "refusée"
+        elif decision["gap"]:
             result["signature"] = "non vérifiée"
             append_audit(paths, {"slot": result.get("slot"), "sha256": result.get("sha256"), "reason": decision["gap"]}, "signature")
         paths.ensure_runtime()

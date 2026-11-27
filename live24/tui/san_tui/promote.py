@@ -112,10 +112,23 @@ def verify_bytes(public, payload, signature):
 
 
 def sign_promotion(paths, digest, measured):
-    """Signe, ou décrit l'écart si la clé ne peut pas être créée."""
+    """Crée la clé sur le disque data, signe, puis vérifie avant de rendre la signature.
+
+    La clé privée reste dans paths.data. Elle n'est pas copiée dans un slot ni dans l'ISO.
+    Une signature qui ne se vérifie pas ne doit pas être appliquée.
+    """
     try:
-        key, _public = ensure_key(paths.data)
-        signature = sign_bytes(key, payload_for(digest, measured))
+        key, public = ensure_key(paths.data)
+        payload = payload_for(digest, measured)
+        signature = sign_bytes(key, payload)
+        if not verify_bytes(public, payload, signature):
+            return "", "signature refusée"
+        detached = paths.data / "release-checksum.sig"
+        detached.write_bytes(signature)
+        os.chmod(detached, 0o644)
+        if "PRIVATE KEY" in detached.read_text(encoding="utf-8", errors="replace"):
+            detached.unlink()
+            return "", "signature refusée"
         return signature.hex(), ""
-    except Exception as exc:
-        return "", "signature indisponible: {}".format(exc.__class__.__name__)
+    except Exception:
+        return "", "signature refusée"
