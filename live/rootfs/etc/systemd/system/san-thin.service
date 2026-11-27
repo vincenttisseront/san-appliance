@@ -1,0 +1,14 @@
+[Unit]
+Description=Pool thin, alerte avant le plein
+After=san-lvm.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-thin
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

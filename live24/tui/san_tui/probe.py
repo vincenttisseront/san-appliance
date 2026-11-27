@@ -71,7 +71,10 @@ class SysfsProbe:
         chosen = {}
         if by_id.is_dir():
             for entry in sorted(by_id.iterdir()):
-                if entry.name.startswith(("dm-", "lvm-", "md-")):
+                # dm-uuid et lvm-pv doublonnent un disque déjà vu. dm-name est un LV.
+                if entry.name.startswith(("dm-uuid-", "lvm-", "md-")):
+                    continue
+                if entry.name.startswith("dm-") and not entry.name.startswith("dm-name-"):
                     continue
                 try:
                     target = entry.resolve()
@@ -125,6 +128,8 @@ class SysfsProbe:
             disk_of(dev) == name and dev in mounted for dev in mounted
         )
         serial = _serial(block) or _serial(identity)
+        if not serial and name.startswith("dm-"):
+            serial = _read(block / "dm" / "uuid").split()[0] if _read(block / "dm" / "uuid") else id_name
         return {
             "id": "/dev/disk/by-id/" + id_name,
             "kernel": name,

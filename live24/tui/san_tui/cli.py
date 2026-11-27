@@ -71,6 +71,23 @@ def main(argv=None):
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
+    sub.add_parser("quota-apply", help="poser les quotas du profil de volume")
+    quota_undo = sub.add_parser("quota-undo", help="retirer le quota automatique")
+    quota_undo.add_argument("--volume", default="")
+    sub.add_parser("snapshot-auto", help="prendre les instantanés crash-consistent")
+    snap_undo = sub.add_parser("snapshot-rollback", help="revenir un seul LUN à son instantané")
+    snap_undo.add_argument("--volume", default="")
+    sub.add_parser("clone-auto", help="cloner le LUN vers le seul volume libre")
+    sub.add_parser("clone-undo", help="retirer le clone automatique")
+    sub.add_parser("thin-auto", help="pool thin, alerte, réserve")
+    sub.add_parser("crypt-auto", help="ouvrir ou chiffrer, clé hors de l'ISO")
+    sub.add_parser("chap-rotate", help="tourner le CHAP sans couper les sessions")
+    sub.add_parser("chap-undo", help="reposer le secret CHAP précédent")
+    sub.add_parser("portal-once", help="ouvrir le portail de secours si le lien est tombé")
+    sub.add_parser("portal-watch", help="surveiller le lien de stockage")
+    sub.add_parser("portal-undo", help="retirer le portail de secours")
+    sub.add_parser("lacp-auto", help="agréger le stockage si LACP est annoncé")
+    sub.add_parser("lacp-undo", help="retirer l'agrégat automatique")
 
     args = parser.parse_args(argv)
     paths = SanPaths(args.root)
@@ -143,6 +160,11 @@ def main(argv=None):
         if args.command == "toram-measure":
             from san_tui.runtime import measure_toram
             return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
+        if args.command in _AUTO_COMMANDS:
+            try:
+                return _print(_auto(args, paths, probe))
+            except Exception as exc:
+                return _print({"ok": False, "reason": exc.__class__.__name__})
         if args.command == "persist-select":
             volume = _need_volume(probe, args.id)
             choice = select_support(paths, args.role, volume, args.confirm)
@@ -182,6 +204,69 @@ def main(argv=None):
         return 2
     parser.error("commande inconnue")
     return 2
+
+
+def _print(payload):
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+_AUTO_COMMANDS = {
+    "quota-apply", "quota-undo", "snapshot-auto", "snapshot-rollback",
+    "clone-auto", "clone-undo", "thin-auto", "crypt-auto",
+    "chap-rotate", "chap-undo", "portal-once", "portal-watch", "portal-undo",
+    "lacp-auto", "lacp-undo",
+}
+
+
+def _auto(args, paths, probe):
+    if args.command == "quota-apply":
+        from san_tui.quota import apply_quotas
+        return apply_quotas(paths, probe)
+    if args.command == "quota-undo":
+        from san_tui.quota import undo_quota
+        return undo_quota(paths, probe, args.volume or None)
+    if args.command == "snapshot-auto":
+        from san_tui.snapshot import take
+        return take(paths, probe)
+    if args.command == "snapshot-rollback":
+        from san_tui.snapshot import rollback
+        return rollback(paths, probe, args.volume or None)
+    if args.command == "clone-auto":
+        from san_tui.clone import clone
+        return clone(paths, probe)
+    if args.command == "clone-undo":
+        from san_tui.clone import undo
+        return undo(paths)
+    if args.command == "thin-auto":
+        from san_tui.thin import ensure_pools
+        return ensure_pools(paths)
+    if args.command == "crypt-auto":
+        from san_tui.luks import prepare
+        return prepare(paths, probe)
+    if args.command == "chap-rotate":
+        from san_tui.chap import rotate
+        return rotate(paths)
+    if args.command == "chap-undo":
+        from san_tui.chap import undo
+        return undo(paths)
+    if args.command == "portal-once":
+        from san_tui.portal import once
+        return once(paths, probe)
+    if args.command == "portal-watch":
+        from san_tui.portal import watch
+        watch(paths, probe)
+        return {"ok": True}
+    if args.command == "portal-undo":
+        from san_tui.portal import undo
+        return undo(paths, probe)
+    if args.command == "lacp-auto":
+        from san_tui.lacp import apply_lacp
+        return apply_lacp(paths, probe)
+    if args.command == "lacp-undo":
+        from san_tui.lacp import undo
+        return undo(paths, probe)
+    return {"ok": False, "reason": "commande inconnue"}
 
 
 def _need_volume(probe, short_id):
@@ -228,9 +313,4 @@ def _squash_bytes():
             return int(open(candidate, encoding="utf-8").read().strip())
         except (OSError, ValueError):
             continue
-    return 0
-
-
-def _print(payload):
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0

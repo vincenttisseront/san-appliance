@@ -1,0 +1,14 @@
+[Unit]
+Description=Chiffrement des volumes, clé hors de l'image
+After=san-thin.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-crypt
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

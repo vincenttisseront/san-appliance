@@ -1,0 +1,13 @@
+[Unit]
+Description=Clone le LUN vers le seul volume libre
+After=san-snapshot.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-clone
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

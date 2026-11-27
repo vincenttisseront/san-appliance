@@ -1,0 +1,13 @@
+[Unit]
+Description=Instantanés crash-consistent des LUN exportés
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-snapshot
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

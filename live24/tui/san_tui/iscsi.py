@@ -119,14 +119,17 @@ def restore(paths, probe, backend):
     claimed = set()
     for target in document["targets"]:
         iqn = target.get("iqn") or "?"
-        reason = _target_problem(target, plan, probe, secrets, claimed)
+        reason = _target_problem(target, plan, probe, secrets, claimed, paths)
         if reason:
             add_alert(paths, "error", "{} : {}".format(iqn, reason), secrets.values())
             skipped.append({"iqn": iqn, "reason": reason})
             continue
         ref = target["acls"][0]["chap_secret_ref"]
         try:
-            backend.apply(target, secrets[ref], probe)
+            attempt = dict(target)
+            attempt["network"] = plan
+            attempt["_secrets"] = secrets
+            backend.apply(attempt, secrets[ref], probe)
         except Exception as exc:
             detail = " ".join(str(exc).split())[:180]
             message = "échec LIO : {} {}".format(exc.__class__.__name__, detail).strip()
@@ -139,13 +142,18 @@ def restore(paths, probe, backend):
     return {"exported": exported, "skipped": skipped}
 
 
-def _target_problem(target, plan, probe, secrets, claimed):
+def _target_problem(target, plan, probe, secrets, claimed, paths=None):
     portal = target.get("portal") or {}
     reason = check_portal(portal, plan)
     if reason:
         return reason
     storage_if = (plan.get("storage") or {}).get("iface")
-    if not probe.interface_has_address(storage_if, portal.get("address")):
+    try:
+        from san_tui.portal import storage_reachable
+        reachable = storage_reachable(plan, probe, portal.get("address"))
+    except Exception:
+        reachable = probe.interface_has_address(storage_if, portal.get("address"))
+    if not reachable:
         return "réseau stockage absent : {}".format(portal.get("address"))
     volume = target.get("volume") or {}
     current = probe.get_volume(volume.get("id"))
@@ -157,17 +165,22 @@ def _target_problem(target, plan, probe, secrets, claimed):
     except SafetyError as exc:
         return str(exc)
     acls = target.get("acls") or []
-    if len(acls) != 1:
+    if not acls:
         return "une ACL par initiateur est requise"
-    ref = acls[0].get("chap_secret_ref")
-    if not ref or ref not in secrets:
-        return "secret CHAP absent"
-    try:
-        check_chap(secrets[ref])
-    except ExportError as exc:
-        return str(exc)
-    if acls[0].get("initiator", "") == "":
-        return "ACL vide"
+    for acl in acls:
+        ref = acl.get("chap_secret_ref")
+        if not ref or ref not in secrets:
+            return "secret CHAP absent"
+        try:
+            check_chap(secrets[ref])
+        except ExportError as exc:
+            return str(exc)
+        if acl.get("initiator", "") == "":
+            return "ACL vide"
+    if paths is not None:
+        reason = _side_refusal(paths, current)
+        if reason:
+            return reason
     portal = target.get("portal") or {}
     key = (portal.get("address"), int(portal.get("port") or 3260))
     if key in claimed:
@@ -221,7 +234,8 @@ class RtslibBackend:
         storage = None
         tgt = None
         try:
-            storage = BlockStorageObject(name, dev=volume["path"])
+            storage = BlockStorageObject(name, dev=_export_device(volume))
+            _enable_pr(storage)
             fabric = FabricModule("iscsi")
             tgt = Target(fabric, target["iqn"], mode="create")
             tpg = TPG(tgt, 1, mode="create")
@@ -235,18 +249,9 @@ class RtslibBackend:
                 # AuthMethod est un paramètre iSCSI. Son absence sur un vieux noyau
                 # ne doit pas ouvrir le portail sans ACL : authentication reste à 1.
                 pass
-            NetworkPortal(
-                tpg,
-                target["portal"]["address"],
-                int(target["portal"]["port"]),
-                mode="create",
-            )
+            NetworkPortal(tpg, _bind_address(target, probe), int(target["portal"]["port"]), mode="create")
             lun = LUN(tpg, int(target["lun"]), storage_object=storage)
-            acl = target["acls"][0]
-            node = NodeACL(tpg, acl["initiator"], mode="create")
-            node.chap_userid = acl["chap_user"]
-            node.chap_password = secret
-            MappedLUN(node, int(target["lun"]), tpg_lun=lun, write_protect=False)
+            _map_acls(tpg, target, secret, lun, int(target["lun"]))
             _apply_measured_iscsi(tpg)
             tpg.enable = True
         except Exception:
@@ -261,9 +266,142 @@ class RtslibBackend:
                 except Exception:
                     pass
             raise
-        # Le secret ne doit pas rester dans l'environnement du processus.
+        try:
+            _map_extras(tpg, target, probe, secret)
+        except Exception:
+            pass
         os.environ.pop("SAN_CHAP_SECRET", None)
         return name
+
+
+def map_lun(target, secrets, volume, lun):
+    """Ajoute un LUN à une cible déjà active, sans écrire enable."""
+    _prepare_lio()
+    from rtslib_fb import BlockStorageObject, FabricModule, LUN, MappedLUN, NodeACL, TPG, Target
+    _ = (MappedLUN, NodeACL)
+    device = _export_device(volume)
+    storage = BlockStorageObject(_safe_name("{}-{}".format(target.get("iqn"), lun)), dev=device)
+    _enable_pr(storage)
+    fabric = FabricModule("iscsi")
+    tgt = Target(fabric, target["iqn"], mode="lookup")
+    tpg = TPG(tgt, 1, mode="lookup")
+    lun_obj = LUN(tpg, int(lun), storage_object=storage)
+    stored = secrets if isinstance(secrets, dict) else {}
+    _map_acls(tpg, target, stored.get((target.get("acls") or [{}])[0].get("chap_secret_ref")), lun_obj, int(lun), stored)
+
+
+def _map_acls(tpg, target, secret, lun_obj, number, stored=None):
+    from rtslib_fb import MappedLUN, NodeACL
+    secrets = stored if isinstance(stored, dict) else {}
+    inline = target.get("_secrets") if isinstance(target.get("_secrets"), dict) else {}
+    secrets = {**secrets, **inline}
+    for acl in target.get("acls") or []:
+        node = NodeACL(tpg, acl["initiator"], mode="any")
+        node.chap_userid = acl["chap_user"]
+        node.chap_password = secrets.get(acl.get("chap_secret_ref"), secret)
+        MappedLUN(node, number, tpg_lun=lun_obj, write_protect=False)
+
+
+def _map_extras(tpg, target, probe, secret):
+    from rtslib_fb import BlockStorageObject, LUN
+    notes = []
+    for extra in target.get("extras") or []:
+        volume = extra.get("volume") or {}
+        ident = volume.get("id") or "?"
+        number = int(extra.get("lun") or 0)
+        current = probe.get_volume(ident)
+        reason = None if current else "volume absent"
+        if current and not reason:
+            reason = identity_problem(volume, current, "volume")
+        if current and not reason:
+            try:
+                assert_usable(current)
+            except SafetyError as exc:
+                reason = str(exc)
+        if current and not reason:
+            reason = _side_refusal(None, current)
+        if reason:
+            notes.append({"volume": ident, "lun": number, "skipped": reason})
+            continue
+        try:
+            storage = BlockStorageObject(_safe_name("{}-{}".format(target.get("iqn"), number)), dev=_export_device(current))
+            _enable_pr(storage)
+            lun_obj = LUN(tpg, number, storage_object=storage)
+            _map_acls(tpg, target, secret, lun_obj, number)
+        except Exception as exc:
+            notes.append({"volume": ident, "lun": number, "skipped": exc.__class__.__name__})
+            continue
+        notes.append({"volume": ident, "lun": number, "exported": True})
+    _write_runtime("lun-extras.json", {"luns": notes})
+
+
+def _bind_address(target, probe):
+    plan = target.get("network") or {}
+    if not plan:
+        return target["portal"]["address"]
+    try:
+        from san_tui.portal import _assign, bind_address, primary_down, standby_address
+        storage_if = (plan.get("storage") or {}).get("iface")
+        if primary_down(probe, storage_if):
+            cidr = standby_address(plan, probe)
+            if cidr:
+                _assign(probe, plan, cidr)
+        return bind_address(target, plan, probe)
+    except Exception:
+        return target["portal"]["address"]
+
+
+def _export_device(volume):
+    try:
+        from san_tui.luks import exported_path
+        path = exported_path(volume)
+    except Exception:
+        path = None
+    return path or volume.get("path")
+
+
+def _enable_pr(storage):
+    result = {"ok": False}
+    try:
+        storage.set_attribute("emulate_pr", "1")
+        result = {"ok": True, "value": str(storage.get_attribute("emulate_pr"))}
+    except Exception as exc:
+        result = {"ok": False, "reason": exc.__class__.__name__}
+    try:
+        storage.set_attribute("force_pr_aptpl", "1")
+    except Exception:
+        pass
+    _write_runtime("pr.json", result)
+
+
+def _side_refusal(paths, volume):
+    try:
+        from san_tui.thin import refusal_for as thin_refusal
+        reason = thin_refusal(volume)
+    except Exception:
+        reason = None
+    if reason:
+        return reason
+    if paths is None:
+        try:
+            from san_tui.paths import SanPaths
+            paths = SanPaths()
+        except Exception:
+            return None
+    try:
+        from san_tui.luks import refusal_for as luks_refusal
+        return luks_refusal(paths, volume)
+    except Exception:
+        return None
+
+
+def _write_runtime(name, payload):
+    path = Path("/run/san") / name
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError:
+        return
 
 
 def _prepare_lio():

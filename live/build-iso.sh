@@ -84,7 +84,15 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
-    "$ROOT/usr/local/sbin/san-release-listen"
+    "$ROOT/usr/local/sbin/san-release-listen" \
+    "$ROOT/usr/local/sbin/san-quota" \
+    "$ROOT/usr/local/sbin/san-snapshot" \
+    "$ROOT/usr/local/sbin/san-clone" \
+    "$ROOT/usr/local/sbin/san-thin" \
+    "$ROOT/usr/local/sbin/san-crypt" \
+    "$ROOT/usr/local/sbin/san-chap-rotate" \
+    "$ROOT/usr/local/sbin/san-portal-watch" \
+    "$ROOT/usr/local/sbin/san-lacp"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -133,7 +141,15 @@ systemctl --root="$ROOT" enable \
     san-ssh.service \
     san-webui-secrets.service \
     san-webui.service \
-    san-release.service
+    san-release.service \
+    san-quota.service \
+    san-snapshot.service \
+    san-clone.service \
+    san-thin.service \
+    san-crypt.service \
+    san-chap-rotate.timer \
+    san-portal-watch.service \
+    san-lacp.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -185,6 +201,9 @@ PY
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
+if find "$ROOT" \( -name volume.key -o -name secrets.json \) | grep -q .; then
+    die "a volume key or CHAP secret is baked into the image"
+fi
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
 if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then
     die "san-webui.service must not launch server/index.mjs"
