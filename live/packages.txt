@@ -26,5 +26,7 @@ lvm2
 openssh-server
 rsyslog
 fio
+openssl
+systemd-timesyncd
 ethtool
 nvme-cli

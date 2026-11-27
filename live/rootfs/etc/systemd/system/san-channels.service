@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply application and kernel channels
+After=san-restore.service san-rescue.service
+# Not ordered before iSCSI. A failure here does not stop exports.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-channels
+
+[Install]
+WantedBy=multi-user.target

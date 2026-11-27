@@ -13,4 +13,5 @@ Cette image ne formate rien et n'exporte rien tant qu'un support de conf n'a pas
 
 Ollama est un conseiller à côté. Sans `SAN_OLLAMA_ENDPOINT` dans `/etc/san/ollama.env`, il ne démarre pas. Il ne choisit qu'un profil déjà mesuré, un seul réglage, et il retire ce réglage si le p99 empire. Un échec de ce service ne coupe ni le réseau, ni iSCSI, ni le support de conf.
 
+NTP, le relevé d'erreurs SCSI, la latence par LUN, les canaux de mise à jour et l'image de secours démarrent sans formulaire. Un bouton de la WebUI ne fait qu'annuler un choix déjà fait. Leur échec ne coupe pas iSCSI.
 Le certificat HTTPS de la WebUI est régénéré à chaque démarrage dans `/var/lib/san/webui/tls`. La clé privée n'est pas dans l'ISO. La session WebUI expire après dix minutes sans activité. iSCSI n'en dépend pas. Le mode usine n'efface la configuration que si le fichier `/etc/san/factory` est présent, et il ne touche pas aux données des LUN. Un démarrage normal ne crée pas ce fichier.

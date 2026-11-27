@@ -146,7 +146,7 @@ class ReleaseTests(unittest.TestCase):
                 raise OSError("down")
 
         with self.assertRaises(ReleaseError) as caught:
-            fetch_and_apply(self.paths, tag="v9", api="http://127.0.0.1:8765", token=secret, opener=Opener())
+            fetch_and_apply(self.paths, api="http://127.0.0.1:8765", token=secret, opener=Opener())
         self.assertNotIn(secret, str(caught.exception))
         text = "\n".join(
             path.read_text(encoding="utf-8", errors="ignore")

@@ -15,6 +15,7 @@ import { auditResponse } from './audit-route.mjs'
 import { handleAppliance } from './guard.mjs'
 import { SESSION_SECONDS, capSetCookie, createSession, readCookie, sessionCookie, touchSession } from './session.mjs'
 import { newestSlot } from './status.mjs'
+import { renderChannels, renderLatency, renderScsi } from './boards.mjs'
 
 const testMode = process.env.SAN_FRONT_TEST === '1'
 const listenPort = Number(process.env.SAN_FRONT_PORT || 3000)
@@ -81,6 +82,9 @@ function page() {
 <pre id="diff">${escapeHtml(diff)}</pre>
 <p><a href="/appliance-config">Télécharger la configuration</a></p>
 <p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
+<p><a href="/scsi-errors">Erreurs SCSI</a></p>
+<p><a href="/latency">Latence</a></p>
+<p><a href="/channels">Canaux</a></p>
 <p><button id="undo" type="button">Revenir au slot précédent</button></p>
 <pre id="out"></pre>
 </main>
@@ -229,6 +233,22 @@ function writeLock(lock) {
   }
 }
 
+
+function channelView(file) {
+  const state = readJson(file, null)
+  if (!state || typeof state !== 'object') return {}
+  const active = state.active
+  const slot = (state.slots && state.slots[active]) || {}
+  return {
+    active,
+    previous: state.previous || null,
+    p99_us: slot.p99_us,
+    kernel: slot.kernel || '',
+    signed: Boolean(state.signature),
+    signing_gap: state.signing_gap || '',
+  }
+}
+
 let key
 let cert
 try {
@@ -268,6 +288,28 @@ const server = https.createServer({ key, cert }, async (req, res) => {
       res.end(answer.body)
       return
     }
+    if (pathOnly === '/scsi-errors' && req.method === 'GET') {
+      const board = process.env.SAN_SCSI_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'scsi-errors.json')
+      applySession(res, session, ended)
+      send(res, 200, renderScsi(readJson(board, [])), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/latency' && req.method === 'GET') {
+      const board = process.env.SAN_LATENCY_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'latency.json')
+      applySession(res, session, ended)
+      send(res, 200, renderLatency(readJson(board, { global_p99_us: null, luns: [] })), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/channels' && req.method === 'GET') {
+      applySession(res, session, ended)
+      send(res, 200, renderChannels({
+        channels: {
+          app: channelView(sanPath('var', 'lib', 'san', 'conf', 'app', 'state.json')),
+          kernel: channelView(sanPath('var', 'lib', 'san', 'conf', 'kernel', 'state.json')),
+        },
+      }), 'text/html; charset=utf-8')
+      return
+    }
     if (pathOnly === '/appliance-update' && req.method === 'GET') {
       applySession(res, session, ended)
       send(res, 200, page(), 'text/html; charset=utf-8')
@@ -304,6 +346,32 @@ const server = https.createServer({ key, cert }, async (req, res) => {
       send(res, 200, '{"ended":true}\n', 'application/json; charset=utf-8')
       return
     }
+    if ((pathOnly === '/scsi-errors' || pathOnly === '/latency' || pathOnly === '/channels') && req.method === 'POST') {
+      const op = pathOnly === '/scsi-errors' ? 'clear-scsi' : (pathOnly === '/latency' ? 'clear-latency' : '')
+      let undo = ''
+      if (pathOnly === '/channels') {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const raw = Buffer.concat(chunks).toString('utf8')
+        try {
+          const parsed = JSON.parse(raw || '{}')
+          undo = parsed.undo || ''
+        } catch {
+          const params = new URLSearchParams(raw)
+          undo = params.get('undo') || ''
+        }
+        if (undo !== 'app' && undo !== 'kernel') {
+          applySession(res, session, ended)
+          send(res, 400, '{"applied":false,"error":"demande refusée"}\n', 'application/json')
+          return
+        }
+      }
+      const message = op ? { op } : { undo }
+      const answer = await askUpdater(JSON.stringify(message))
+      applySession(res, session, ended)
+      send(res, 200, answer, 'application/json; charset=utf-8')
+      return
+    }
     if (pathOnly === '/appliance-update' && req.method === 'POST') {
       const chunks = []
       let size = 0
@@ -327,6 +395,10 @@ const server = https.createServer({ key, cert }, async (req, res) => {
         }
         if (parsed.undo === true) {
           payload = JSON.stringify({ undo: true })
+        } else if (parsed.undo === 'app' || parsed.undo === 'kernel') {
+          payload = JSON.stringify({ undo: parsed.undo })
+        } else if (parsed.op === 'clear-scsi' || parsed.op === 'clear-latency') {
+          payload = JSON.stringify({ op: parsed.op })
         } else {
           const decision = handleAppliance({
             method: 'POST',
@@ -341,7 +413,9 @@ const server = https.createServer({ key, cert }, async (req, res) => {
             send(res, decision.status, JSON.stringify({ applied: false, error: decision.error || 'refusé' }) + '\n', 'application/json; charset=utf-8')
             return
           }
-          payload = JSON.stringify({ tag: parsed.tag || '', api: parsed.api || '' })
+          applySession(res, session, ended)
+          send(res, 400, '{"applied":false,"error":"la mise à jour est automatique"}\n', 'application/json')
+          return
         }
       } catch {
         applySession(res, session, ended)
