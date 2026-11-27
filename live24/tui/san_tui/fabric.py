@@ -43,10 +43,22 @@ def choose_standby(portal, interfaces, admin=None):
     return None
 
 
-def apply_vaai(storage):
-    """Active UNMAP, WRITE SAME, ATS et XCOPY. Une option refusée n'arrête pas les autres."""
+def apply_vaai(storage, paths=None):
+    """Active UNMAP, WRITE SAME, ATS et XCOPY. Une option refusée n'arrête pas les autres.
+
+    UNMAP n'a pas de formulaire. La commande qui le retire le laisse à 0.
+    """
+    unmap_off = False
+    if paths is not None:
+        try:
+            from san_tui.auto import undone
+            unmap_off = undone(paths, "unmap")
+        except Exception:
+            unmap_off = False
     errors = []
     for name, value in VAAI_ATTRIBUTES:
+        if name == "emulate_tpu" and unmap_off:
+            value = 0
         try:
             storage.set_attribute(name, value)
         except Exception as exc:
@@ -134,7 +146,8 @@ def apply_export_features(storage, tgt, spec, secret, interfaces, admin=None):
     """Réglages à côté du portail préféré. Ne retire pas la cible."""
     errors = []
     try:
-        errors.extend(apply_vaai(storage))
+        from san_tui.paths import SanPaths
+        errors.extend(apply_vaai(storage, SanPaths(os.environ.get("SAN_ROOT"))))
     except Exception as exc:
         errors.append("vaai: {}".format(exc.__class__.__name__))
     standby_lun = None

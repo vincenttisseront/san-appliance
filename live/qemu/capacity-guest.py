@@ -361,6 +361,7 @@ def crypt_with_key():
         "key_path": str(key) if key.is_file() else None,
         "key_under_usr": str(key).startswith("/usr") if key.is_file() else None,
         "is_luks": is_luks,
+        "fast_path": "clair" if not is_luks else "chiffré",
         "mapper": mapper,
         "mapper_is_block": bool(mapper) and stat_block(mapper),
     }

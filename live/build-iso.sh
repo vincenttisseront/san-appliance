@@ -88,6 +88,7 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-lvm" \
     "$ROOT/usr/local/sbin/san-nvme" \
     "$ROOT/usr/local/sbin/san-perf" \
+    "$ROOT/usr/local/sbin/san-blocktune" \
     "$ROOT/usr/local/sbin/san-ab" \
     "$ROOT/usr/local/sbin/san-ollama" \
     "$ROOT/usr/local/sbin/san-ssh" \
@@ -168,6 +169,7 @@ systemctl --root="$ROOT" enable \
     san-lvm.service \
     san-nvme.service \
     san-perf.service \
+    san-blocktune.service \
     san-ab.service \
     san-ollama.service \
     san-ssh.service \

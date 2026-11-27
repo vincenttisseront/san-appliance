@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+# Un échec de réglage ne doit pas faire échouer le démarrage : iSCSI reste servi.
+/usr/local/sbin/san-tui block-tune || true
+exit 0

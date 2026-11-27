@@ -14,7 +14,7 @@ def key_file(paths):
 
 
 def refusal_for(paths, volume):
-    """Refus seulement si le volume est LUKS et que la clé manque."""
+    """Le chemin rapide ne passe pas par un volume chiffré."""
     device = (volume or {}).get("path")
     if not device or not os.path.exists(device):
         return None
@@ -22,80 +22,55 @@ def refusal_for(paths, volume):
         luks = is_luks(device)
     except OSError:
         return None
-    if not luks:
-        return None
-    key = key_file(paths)
-    if not key.is_file() or key.stat().st_size == 0:
-        return "clé de chiffrement absente : export refusé"
-    mapper = mapper_name(volume)
-    if not os.path.exists("/dev/mapper/" + mapper):
-        if not open_volume(device, mapper, key):
-            return "volume chiffré non ouvert"
-        _remember(volume.get("id"), "/dev/mapper/" + mapper)
+    if luks:
+        return "chiffrement hors du chemin rapide"
     return None
 
 
 def exported_path(volume):
-    """Chemin servi : le mapper si ce volume a été ouvert, sinon le volume."""
-    ident = (volume or {}).get("id")
-    mapping = _read_map()
-    mapped = mapping.get(ident)
-    if mapped and os.path.exists(mapped):
-        return mapped
+    """Le LUN exporté est le bloc lui-même, jamais un mapper."""
     return (volume or {}).get("path")
 
 
 def prepare(paths, probe):
-    """Ouvre les LUKS. Chiffre un LV vide géré. N'invente pas de clé pour un LUKS déjà là."""
-    from san_tui.persist import PersistError, load_exports
+    """Ne chiffre pas les volumes exportés. Ferme un mapper déjà ouvert sur ce chemin."""
+    _ = probe
+    closed = close_fast_path(paths)
     try:
+        from san_tui.persist import PersistError, load_exports
         document, _secrets = load_exports(paths)
     except PersistError as exc:
         add_alert(paths, "error", "chiffrement : conf illisible")
-        return {"opened": [], "skipped": [{"volume": "*", "reason": str(exc)}]}
-    opened = []
+        return {
+            "opened": [],
+            "skipped": [{"volume": "*", "reason": str(exc)}],
+            "closed": closed,
+            "encryption": "hors du chemin rapide",
+        }
     skipped = []
     for volume in _iter_volumes(document):
-        current = probe.get_volume(volume.get("id")) or volume
-        device = current.get("path")
-        ident = volume.get("id") or "?"
-        if not device or not os.path.exists(device):
-            skipped.append({"volume": ident, "reason": "volume absent"})
-            continue
-        try:
-            luks = is_luks(device)
-        except OSError:
-            add_alert(paths, "error", "cryptsetup indisponible : {}".format(ident))
-            skipped.append({"volume": ident, "reason": "cryptsetup indisponible"})
-            continue
-        key = key_file(paths)
-        if luks and (not key.is_file() or key.stat().st_size == 0):
-            add_alert(paths, "error", "clé de chiffrement absente : export refusé : {}".format(ident))
-            skipped.append({"volume": ident, "reason": "clé de chiffrement absente : export refusé"})
-            continue
-        if not luks:
-            if not _blank_managed(device):
-                skipped.append({"volume": ident, "reason": "déjà occupé, laissé en clair"})
-                continue
-            if key.is_file() and key.stat().st_size > 0:
-                pass
-            else:
-                key = _create_key(paths)
-            if key is None:
-                skipped.append({"volume": ident, "reason": "clé non écrite hors de l'image"})
-                continue
-            if not format_volume(device, key):
-                add_alert(paths, "error", "luksFormat refusé : {}".format(ident))
-                skipped.append({"volume": ident, "reason": "luksFormat refusé"})
-                continue
-        mapper = mapper_name(current)
-        if not open_volume(device, mapper, key):
-            add_alert(paths, "error", "luksOpen refusé : {}".format(ident))
-            skipped.append({"volume": ident, "reason": "luksOpen refusé"})
-            continue
-        _remember(ident, "/dev/mapper/" + mapper)
-        opened.append({"volume": ident, "mapper": "/dev/mapper/" + mapper, "mode": _mode(key)})
-    return {"opened": opened, "skipped": skipped, "key": str(key_file(paths))}
+        skipped.append({"volume": volume.get("id") or "?", "reason": "chemin rapide sans chiffrement"})
+    return {"opened": [], "skipped": skipped, "closed": closed, "encryption": "hors du chemin rapide"}
+
+
+def close_fast_path(paths):
+    """Ferme les mapper du chemin rapide. N'en crée pas."""
+    closed = []
+    mapping = _read_map()
+    for ident, mapper in list(mapping.items()):
+        name = str(mapper or "").rsplit("/", 1)[-1]
+        if name.startswith("san-crypt-"):
+            subprocess.run(
+                ["cryptsetup", "close", name],
+                text=True, capture_output=True, check=False,
+            )
+            closed.append(name)
+        mapping.pop(ident, None)
+    if mapping or closed:
+        _write_json(_map_path(), {}, 0o644)
+    elif _map_path().is_file():
+        _write_json(_map_path(), {}, 0o644)
+    return closed
 
 
 def is_luks(device):
