@@ -5,6 +5,7 @@
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
+import { auditResponse } from './audit-route.mjs'
 
 const PAGE = `<!DOCTYPE html>
 <html lang="fr">
@@ -20,6 +21,7 @@ const PAGE = `<!DOCTYPE html>
 <label>Version <input name="tag" placeholder="v1.2.3 ou vide pour latest"></label>
 <button type="submit">Appliquer</button>
 </form>
+<p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
 <pre id="out"></pre>
 </main>
 <script>
@@ -98,6 +100,12 @@ const server = http.createServer(async (req, res) => {
     return
   }
   const path = (req.url || '/').split('?')[0]
+  if (path === '/appliance-audit' && req.method === 'GET') {
+    const answer = auditResponse(process.env.SAN_AUDIT_FILE || '/run/san/audit-export.json')
+    res.writeHead(answer.status, answer.headers)
+    res.end(answer.body)
+    return
+  }
   if (path === '/appliance-update' && req.method === 'GET') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
     res.end(PAGE)

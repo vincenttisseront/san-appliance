@@ -139,6 +139,9 @@ class SysfsProbe:
             "active": bool(holders) or (disk_mounted and name == parent and not own_mounts),
             "boot": parent in boots,
             "kind": "block",
+            "group_id": _read(block / "san_group"),
+            "state": _read(block / "device" / "state"),
+            "io_errors": _io_errors(block),
         }
 
 
@@ -182,6 +185,15 @@ def _size(block):
     if not raw.isdigit():
         return None
     return int(raw) * 512
+
+
+def _io_errors(block):
+    raw = _read(block / "device" / "ioerr_cnt").lower()
+    if raw.startswith("0x"):
+        raw = raw[2:]
+    if not raw or any(ch not in "0123456789abcdef" for ch in raw):
+        return 0
+    return int(raw, 16)
 
 
 def _dirnames(path):

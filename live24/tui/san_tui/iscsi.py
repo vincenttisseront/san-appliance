@@ -7,7 +7,9 @@ from pathlib import Path
 
 from san_tui.alerts import add_alert
 from san_tui.identity import identity_problem
+from san_tui.mask import mask_targets
 from san_tui.persist import PersistError, load_choice, load_exports, save_exports
+from san_tui.retire import retired_ids
 from san_tui.safety import SafetyError, assert_usable, check_portal, describe_action, require_confirmation
 
 
@@ -115,10 +117,21 @@ def restore(paths, probe, backend):
         message = "conf invalide : {}".format(exc)
         add_alert(paths, "error", message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
+    retired = retired_ids(paths)
+    visible, hidden = mask_targets(document.get("targets") or [])
+    for target in hidden:
+        iqn = target.get("iqn") or "?"
+        add_alert(paths, "error", "{} : LUN invisible, aucune ACL".format(iqn), secrets.values())
+        skipped.append({"iqn": iqn, "reason": "aucune ACL"})
     plan = document.get("network") or {}
     claimed = set()
-    for target in document["targets"]:
+    for target in visible:
         iqn = target.get("iqn") or "?"
+        volume_id = (target.get("volume") or {}).get("id")
+        if volume_id in retired:
+            add_alert(paths, "error", "{} : disque retiré".format(iqn), secrets.values())
+            skipped.append({"iqn": iqn, "reason": "disque retiré"})
+            continue
         reason = _target_problem(target, plan, probe, secrets, claimed)
         if reason:
             add_alert(paths, "error", "{} : {}".format(iqn, reason), secrets.values())
@@ -217,18 +230,16 @@ class RtslibBackend:
             assert_usable(volume)
         except SafetyError as exc:
             raise ExportError(str(exc)) from exc
-        name = _safe_name(target["iqn"])
+        safe = _safe_name(target["iqn"])
         storage = None
         tgt = None
         try:
-            storage = BlockStorageObject(name, dev=volume["path"])
+            storage = BlockStorageObject(safe, dev=volume["path"])
             fabric = FabricModule("iscsi")
             tgt = Target(fabric, target["iqn"], mode="create")
             tpg = TPG(tgt, 1, mode="create")
-            tpg.set_attribute("generate_node_acls", 0)
-            tpg.set_attribute("cache_dynamic_acls", 0)
-            tpg.set_attribute("demo_mode_write_protect", 1)
-            tpg.set_attribute("authentication", 1)
+            for guard, value in portal_guards().items():
+                tpg.set_attribute(guard, value)
             try:
                 tpg.set_parameter("AuthMethod", "CHAP")
             except Exception:
@@ -263,7 +274,17 @@ class RtslibBackend:
             raise
         # Le secret ne doit pas rester dans l'environnement du processus.
         os.environ.pop("SAN_CHAP_SECRET", None)
-        return name
+        return safe
+
+
+def portal_guards():
+    """Aucun LUN n'est visible sans ACL. Le mode démo reste fermé."""
+    return {
+        "generate_node_acls": 0,
+        "cache_dynamic_acls": 0,
+        "demo_mode_write_protect": 1,
+        "authentication": 1,
+    }
 
 
 def _prepare_lio():
