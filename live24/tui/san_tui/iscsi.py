@@ -248,6 +248,16 @@ class RtslibBackend:
             node.chap_password = secret
             MappedLUN(node, int(target["lun"]), tpg_lun=lun, write_protect=False)
             _apply_measured_iscsi(tpg)
+            # ALUA et UNMAP sont à côté de l'export : leur échec le laisse servi.
+            try:
+                from san_tui.fabric import apply_export_features
+                try:
+                    interfaces = probe.list_interfaces()
+                except Exception:
+                    interfaces = []
+                apply_export_features(storage, tgt, target, secret, interfaces)
+            except Exception:
+                pass
             tpg.enable = True
         except Exception:
             if tgt is not None:

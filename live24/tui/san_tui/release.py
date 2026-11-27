@@ -21,6 +21,12 @@ from urllib.parse import urlparse
 REPO = "vincenttisseront/san-appliance"
 ASSET = "san-appliance-app.tar.gz"
 ASSET_SUM = "san-appliance-app.tar.gz.sha256"
+KERNEL_ASSET = "san-appliance-kernel.tar.gz"
+KERNEL_ASSET_SUM = "san-appliance-kernel.tar.gz.sha256"
+CHANNELS = {
+    "app": {"asset": ASSET, "sum": ASSET_SUM},
+    "kernel": {"asset": KERNEL_ASSET, "sum": KERNEL_ASSET_SUM},
+}
 API_DEFAULT = "https://api.github.com"
 MAX_BYTES = 256 * 1024 * 1024
 LISTEN = ("127.0.0.1", 9753)
@@ -36,16 +42,22 @@ class ReleaseError(Exception):
     pass
 
 
+def channel_dir(paths, channel="app"):
+    if channel not in CHANNELS:
+        raise ReleaseError("canal refusé")
+    return paths.conf / channel
+
+
 def app_dir(paths):
-    return paths.conf / "app"
+    return channel_dir(paths, "app")
 
 
-def state_path(paths):
-    return app_dir(paths) / "state.json"
+def state_path(paths, channel="app"):
+    return channel_dir(paths, channel) / "state.json"
 
 
-def load_state(paths):
-    path = state_path(paths)
+def load_state(paths, channel="app"):
+    path = state_path(paths, channel)
     if not path.is_file():
         return {"version": 1, "active": "a", "slots": {"a": {}, "b": {}}, "rolled_back": False}
     try:
@@ -59,10 +71,10 @@ def load_state(paths):
     return state
 
 
-def _write_state(paths, state):
-    root = app_dir(paths)
+def _write_state(paths, state, channel="app"):
+    root = channel_dir(paths, channel)
     root.mkdir(parents=True, exist_ok=True)
-    path = state_path(paths)
+    path = state_path(paths, channel)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o644)
@@ -146,15 +158,100 @@ def run_health(slot_dir):
     return completed.returncode
 
 
-def apply_verified(paths, archive, checksum_text, health=None):
-    """Vérifie l'empreinte, écrit seulement le slot inactif, puis bascule une fois."""
-    expected = parse_checksum(checksum_text, ASSET)
+def _resume(gate, frozen):
+    if not frozen:
+        return
+    try:
+        gate.resume()
+    except Exception:
+        try:
+            gate.resume()
+        except Exception:
+            return
+
+
+def apply_verified(paths, archive, checksum_text, health=None, gate=None, bench=None,
+                   signer=None, channel="app", asset=None, pin=None):
+    """Vérifie l'empreinte, gèle les exports le temps de l'écriture, puis les rouvre.
+
+    Le slot ne devient actif que si le banc fio passe et si le slot répond.
+    Le canal noyau n'accepte qu'une version 6.8, au plus celle suivie par doctor.
+    """
+    if channel not in CHANNELS:
+        raise ReleaseError("canal refusé")
+    asset_name = asset or CHANNELS[channel]["asset"]
+    expected = parse_checksum(checksum_text, asset_name)
     digest = verify_archive(archive, expected)
+    kernel_version = None
+    if channel == "kernel":
+        from san_tui.kernelpin import kernel_allowed, kernel_release_of
+
+        kernel_version = kernel_release_of(archive)
+        if not kernel_allowed(kernel_version, pin if pin is not None else _installed_pin(paths)):
+            raise ReleaseError("noyau hors 6.8")
     check = health or run_health
-    state = load_state(paths)
+    measure = bench or _default_bench
+    sign = signer or _default_sign
+    state = load_state(paths, channel)
+    current = state["active"]
+    active_sha = ((state.get("slots") or {}).get(current) or {}).get("sha256")
+    if active_sha and active_sha == digest:
+        return {
+            "applied": False,
+            "unchanged": True,
+            "slot": current,
+            "previous": current,
+            "rollback": False,
+            "sha256": digest,
+            "channel": channel,
+        }
+    measured = measure()
+    if not isinstance(measured, dict) or not measured.get("pass"):
+        raise ReleaseError("banc fio refusé")
+    use_gate = gate if gate is not None else _null_gate()
+    frozen = False
+    if channel == "app":
+        try:
+            use_gate.freeze()
+            frozen = True
+        except Exception as exc:
+            _resume(use_gate, True)
+            raise ReleaseError("gel des exports impossible") from exc
+    try:
+        return _commit_slot(
+            paths, archive, state, digest, measured, check, sign, channel, kernel_version,
+        )
+    finally:
+        _resume(use_gate, frozen)
+
+
+def _null_gate():
+    from san_tui.fabric import NullGate
+    return NullGate()
+
+
+def _default_bench():
+    from san_tui.promote import fio_bench
+    return fio_bench()
+
+
+def _default_sign(paths, digest, measured):
+    from san_tui.promote import sign_promotion
+    return sign_promotion(paths, digest, measured)
+
+
+def _installed_pin(paths):
+    path = paths.root / "usr" / "share" / "san" / "kernel-pin"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _commit_slot(paths, archive, state, digest, measured, check, sign, channel, kernel_version):
     current = state["active"]
     target = inactive_slot(current)
-    root = app_dir(paths)
+    root = channel_dir(paths, channel)
     staging = root / (target + ".staging")
     final = root / target
     if staging.exists():
@@ -171,38 +268,64 @@ def apply_verified(paths, archive, checksum_text, health=None):
     health_script = final / "health"
     if health_script.is_file():
         os.chmod(health_script, 0o755)
+    slot_record = {"sha256": digest, "p99_us": measured.get("p99_us")}
+    if kernel_version:
+        slot_record["kernel"] = kernel_version
     updated = {
         "version": 1,
         "active": target,
         "rolled_back": False,
+        "previous": current,
         "slots": {
             "a": dict((state.get("slots") or {}).get("a") or {}),
             "b": dict((state.get("slots") or {}).get("b") or {}),
         },
     }
-    updated["slots"][target] = {"sha256": digest}
-    _write_state(paths, updated)
+    updated["slots"][target] = slot_record
     try:
         healthy = check(final) == 0
     except Exception:
         healthy = False
-    if healthy:
+    if not healthy:
+        updated["active"] = current
+        updated["previous"] = state.get("previous")
+        updated["rolled_back"] = True
+        _write_state(paths, updated, channel)
         return {
-            "applied": True,
-            "slot": target,
+            "applied": False,
+            "slot": current,
             "previous": current,
-            "rollback": False,
+            "rollback": True,
             "sha256": digest,
+            "channel": channel,
+            "p99_us": measured.get("p99_us"),
         }
-    updated["active"] = current
-    updated["rolled_back"] = True
-    _write_state(paths, updated)
+    signature, gap = "", ""
+    try:
+        signature, gap = sign(paths, digest, measured)
+    except Exception:
+        gap = "signature indisponible"
+    if signature:
+        updated["signature"] = signature
+    elif gap:
+        updated["signing_gap"] = gap
+    _write_state(paths, updated, channel)
+    if channel == "app":
+        try:
+            from san_tui.rescue import refresh_rescue
+            refresh_rescue(paths, final)
+        except Exception:
+            pass
     return {
-        "applied": False,
-        "slot": current,
+        "applied": True,
+        "slot": target,
         "previous": current,
-        "rollback": True,
+        "rollback": False,
         "sha256": digest,
+        "channel": channel,
+        "p99_us": measured.get("p99_us"),
+        "signed": bool(signature),
+        "signing_gap": gap,
     }
 
 
@@ -259,7 +382,7 @@ def _request(url, token, opener, accept):
     return data
 
 
-def fetch_release(api, tag, token, opener):
+def fetch_release(api, tag, token, opener, asset=ASSET, asset_sum=ASSET_SUM):
     base = allowed_api(api)
     if tag:
         if not all(char.isalnum() or char in "._-" for char in tag) or len(tag) > 64:
@@ -276,13 +399,13 @@ def fetch_release(api, tag, token, opener):
     for item in meta.get("assets") or []:
         if isinstance(item, dict) and item.get("name") and item.get("browser_download_url"):
             assets[item["name"]] = item["browser_download_url"]
-    if ASSET not in assets or ASSET_SUM not in assets:
+    if asset not in assets or asset_sum not in assets:
         raise ReleaseError("archive ou empreinte absente de la release")
-    for name in (ASSET, ASSET_SUM):
+    for name in (asset, asset_sum):
         if not allowed_download(assets[name], base):
             raise ReleaseError("adresse de téléchargement refusée")
-    archive = _request(assets[ASSET], token, opener, "application/octet-stream")
-    checksum = _request(assets[ASSET_SUM], token, opener, "text/plain")
+    archive = _request(assets[asset], token, opener, "application/octet-stream")
+    checksum = _request(assets[asset_sum], token, opener, "text/plain")
     try:
         text = checksum.decode("utf-8")
     except UnicodeError as exc:
@@ -290,29 +413,120 @@ def fetch_release(api, tag, token, opener):
     return archive, text
 
 
-def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None):
+def fetch_and_apply(paths, tag="", api="", token="", opener=None, health=None,
+                    channel="app", gate=None, bench=None, signer=None, pin=None):
+    if tag:
+        raise ReleaseError("la mise à jour est automatique")
+    spec = CHANNELS.get(channel)
+    if spec is None:
+        raise ReleaseError("canal refusé")
     client = opener or urllib.request.build_opener()
     try:
-        archive, checksum = fetch_release(api, tag, token, client)
+        archive, checksum = fetch_release(
+            api, "", token, client, asset=spec["asset"], asset_sum=spec["sum"],
+        )
     except ReleaseError:
         raise
     except Exception as exc:
         raise ReleaseError("téléchargement refusé") from exc
-    return apply_verified(paths, archive, checksum, health=health)
+    return apply_verified(
+        paths, archive, checksum, health=health, gate=gate, bench=bench,
+        signer=signer, channel=channel, pin=pin,
+    )
+
+
+def channel_status(paths):
+    found = {}
+    for channel in CHANNELS:
+        try:
+            state = load_state(paths, channel)
+        except ReleaseError as exc:
+            found[channel] = {"error": str(exc)}
+            continue
+        active = state.get("active")
+        slot = (state.get("slots") or {}).get(active) or {}
+        found[channel] = {
+            "active": active,
+            "previous": state.get("previous"),
+            "rolled_back": bool(state.get("rolled_back")),
+            "sha256": slot.get("sha256") or "",
+            "p99_us": slot.get("p99_us"),
+            "kernel": slot.get("kernel") or "",
+            "signed": bool(state.get("signature")),
+            "signing_gap": state.get("signing_gap") or "",
+        }
+    return {"channels": found}
+
+
+def undo_channel(paths, channel):
+    if channel not in CHANNELS:
+        raise ReleaseError("canal refusé")
+    state = load_state(paths, channel)
+    previous = state.get("previous")
+    if previous not in {"a", "b"} or previous == state.get("active"):
+        raise ReleaseError("rien à annuler")
+    state["active"] = previous
+    state["previous"] = None
+    state["undo"] = True
+    _write_state(paths, state, channel)
+    return {"undo": True, "channel": channel, "slot": previous}
+
+
+def _boot_choice(paths):
+    path = paths.run / "boot.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def sync_channels(paths, fetcher, gate=None, bench=None, health=None, signer=None, pin=None):
+    """Applique chaque canal. L'échec de l'un laisse l'autre, et iSCSI, en place."""
+    results = []
+    names = ("app", "kernel")
+    if _boot_choice(paths).get("chosen") == "rescue":
+        results.append({"channel": "app", "applied": False, "skipped": "secours"})
+        names = ("kernel",)
+    for channel in names:
+        try:
+            archive, checksum = fetcher(channel)
+            results.append(apply_verified(
+                paths, archive, checksum, health=health, gate=gate, bench=bench,
+                signer=signer, channel=channel,
+                asset=CHANNELS[channel]["asset"], pin=pin,
+            ))
+        except ReleaseError as exc:
+            results.append({"channel": channel, "applied": False, "error": str(exc)})
+        except Exception:
+            results.append({"channel": channel, "applied": False, "error": "canal en échec"})
+    return {"channels": results}
 
 
 def handle_request(paths, payload, token_file="/etc/san/github.token"):
     if not isinstance(payload, dict):
         raise ReleaseError("demande refusée")
-    tag = payload.get("tag") or ""
-    api = payload.get("api") or ""
-    if not isinstance(tag, str) or not isinstance(api, str):
-        raise ReleaseError("demande refusée")
-    token = read_token(token_file) if Path(token_file).is_file() else ""
-    result = fetch_and_apply(paths, tag=tag, api=api, token=token)
-    if token and token in json.dumps(result):
-        raise ReleaseError("demande refusée")
-    return result
+    if payload.get("token") or payload.get("github_token") or payload.get("tag"):
+        raise ReleaseError("la mise à jour est automatique")
+    undo = payload.get("undo") or ""
+    op = payload.get("op") or ""
+    if undo:
+        if not isinstance(undo, str):
+            raise ReleaseError("demande refusée")
+        return undo_channel(paths, undo)
+    if op == "clear-scsi":
+        from san_tui.scsilog import clear
+        clear(paths)
+        return {"cleared": "scsi"}
+    if op == "clear-latency":
+        from san_tui.latency import clear
+        clear(paths)
+        return {"cleared": "latency"}
+    if op in ("", "status"):
+        return channel_status(paths)
+    raise ReleaseError("demande refusée")
 
 
 def serve(paths, token_file="/etc/san/github.token"):

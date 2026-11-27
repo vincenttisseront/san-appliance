@@ -1,44 +1,41 @@
 /**
  * Loopback front for the WebUI. Nitro stays on 127.0.0.1:3010.
- * /appliance-update is served here and forwarded to the root updater on 127.0.0.1:9753.
+ * Appliance pages are served here. The updater on 127.0.0.1:9753 only undoes.
  */
 import http from 'node:http'
+import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
+import { renderChannels, renderLatency, renderScsi } from './boards.mjs'
 
-const PAGE = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<title>Mise à jour SAN</title>
-</head>
-<body>
-<main>
-<h1>Mise à jour de l'application</h1>
-<p>Release GitHub de vincenttisseront/san-appliance. L'empreinte est vérifiée avant écriture. Un échec laisse les exports en place. Le jeton n'est pas enregistré dans l'image.</p>
-<form id="update">
-<label>Version <input name="tag" placeholder="v1.2.3 ou vide pour latest"></label>
-<button type="submit">Appliquer</button>
-</form>
-<pre id="out"></pre>
-</main>
-<script>
-document.getElementById("update").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const tag = new FormData(event.target).get("tag") || "";
-  const out = document.getElementById("out");
-  out.textContent = "en cours";
-  const response = await fetch("/appliance-update", {
-    method: "POST",
-    headers: {"content-type": "application/json"},
-    body: JSON.stringify({tag})
-  });
-  out.textContent = await response.text();
-});
-</script>
-</body>
-</html>
-`
+const BOARDS = '/var/lib/san/webui/boards'
+const APP_STATE = '/var/lib/san/conf/app/state.json'
+const KERNEL_STATE = '/var/lib/san/conf/kernel/state.json'
+
+function readJson(path, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(path, 'utf8'))
+  } catch {
+    return fallback
+  }
+}
+
+function channelView(path) {
+  const state = readJson(path, null)
+  if (!state || typeof state !== 'object') {
+    return {}
+  }
+  const active = state.active
+  const slot = (state.slots && state.slots[active]) || {}
+  return {
+    active,
+    previous: state.previous || null,
+    p99_us: slot.p99_us,
+    kernel: slot.kernel || '',
+    signed: Boolean(state.signature),
+    signing_gap: state.signing_gap || '',
+  }
+}
 
 const childEnv = {
   ...process.env,
@@ -90,6 +87,28 @@ function askUpdater(body) {
   })
 }
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > 8192) {
+        reject(Object.assign(new Error('too big'), { status: 413 }))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+function html(res, body) {
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+  res.end(body)
+}
+
 const server = http.createServer(async (req, res) => {
   const local = req.socket.localAddress
   if (local !== '127.0.0.1' && local !== '::ffff:127.0.0.1') {
@@ -98,38 +117,58 @@ const server = http.createServer(async (req, res) => {
     return
   }
   const path = (req.url || '/').split('?')[0]
-  if (path === '/appliance-update' && req.method === 'GET') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    res.end(PAGE)
+  if (path === '/scsi-errors' && req.method === 'GET') {
+    html(res, renderScsi(readJson(`${BOARDS}/scsi-errors.json`, [])))
     return
   }
-  if (path === '/appliance-update' && req.method === 'POST') {
-    const chunks = []
-    let size = 0
-    for await (const chunk of req) {
-      size += chunk.length
-      if (size > 8192) {
-        res.writeHead(413)
-        res.end()
-        return
-      }
-      chunks.push(chunk)
-    }
-    let payload = Buffer.concat(chunks).toString('utf8')
+  if (path === '/latency' && req.method === 'GET') {
+    html(res, renderLatency(readJson(`${BOARDS}/latency.json`, { global_p99_us: null, luns: [] })))
+    return
+  }
+  if (path === '/appliance-update' && req.method === 'GET') {
+    html(res, renderChannels({
+      channels: { app: channelView(APP_STATE), kernel: channelView(KERNEL_STATE) },
+    }))
+    return
+  }
+  if ((path === '/scsi-errors' || path === '/latency' || path === '/appliance-update') && req.method === 'POST') {
+    let raw = ''
     try {
-      const parsed = JSON.parse(payload || '{}')
-      if (parsed.token || parsed.github_token) {
+      raw = await readBody(req)
+    } catch (err) {
+      res.writeHead(err.status || 400)
+      res.end()
+      return
+    }
+    let payload = {}
+    const contentType = String(req.headers['content-type'] || '')
+    if (contentType.includes('application/json') && raw) {
+      try {
+        payload = JSON.parse(raw)
+      } catch {
         res.writeHead(400, { 'content-type': 'application/json' })
-        res.end('{"applied":false,"error":"jeton refusé dans la demande"}\n')
+        res.end('{"applied":false,"error":"demande refusée"}\n')
         return
       }
-      payload = JSON.stringify({ tag: parsed.tag || '', api: parsed.api || '' })
-    } catch {
+    } else if (raw.includes('undo=')) {
+      const params = new URLSearchParams(raw)
+      payload = { undo: params.get('undo') || '' }
+    }
+    if (payload.token || payload.github_token || payload.tag) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end('{"applied":false,"error":"la mise à jour est automatique"}\n')
+      return
+    }
+    let message = {}
+    if (path === '/scsi-errors') message = { op: 'clear-scsi' }
+    else if (path === '/latency') message = { op: 'clear-latency' }
+    else if (payload.undo === 'app' || payload.undo === 'kernel') message = { undo: payload.undo }
+    else {
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end('{"applied":false,"error":"demande refusée"}\n')
       return
     }
-    const answer = await askUpdater(payload)
+    const answer = await askUpdater(JSON.stringify(message))
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
     res.end(answer)
     return

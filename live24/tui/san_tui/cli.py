@@ -65,9 +65,16 @@ def main(argv=None):
     sub.add_parser("nvme-restore", help="exporter le NVMe-oF enregistré")
     sub.add_parser("perf-apply", help="appliquer le seul réglage mesuré, s'il existe")
     sub.add_parser("ab-apply", help="écrire le slot inactif si une mise à jour est en attente")
-    release_p = sub.add_parser("release-apply", help="appliquer une release GitHub sur le slot inactif")
-    release_p.add_argument("--tag", default="")
+    release_p = sub.add_parser("channels-sync", help="appliquer les canaux app et noyau, sans formulaire")
     release_p.add_argument("--api", default="")
+    undo_p = sub.add_parser("release-undo", help="annuler la dernière promotion automatique")
+    undo_p.add_argument("--channel", required=True, choices=("app", "kernel"))
+    sub.add_parser("rescue-select", help="basculer sur l'image de secours si le slot ne démarre pas")
+    sub.add_parser("rescue-undo", help="annuler le choix de secours de ce démarrage")
+    sub.add_parser("latency-sample", help="mesurer le p99 de chaque LUN")
+    sub.add_parser("scsi-collect", help="relever les erreurs SCSI sans la charge du LUN")
+    sub.add_parser("ntp-apply", help="activer NTP sans bloquer le journal local")
+    sub.add_parser("ntp-undo", help="annuler le choix NTP automatique")
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
@@ -121,18 +128,52 @@ def main(argv=None):
         if args.command == "ab-apply":
             from san_tui.runtime import run_ab
             return _print(run_ab(paths, probe))
-        if args.command == "release-apply":
-            from san_tui.release import fetch_and_apply, read_token
+        if args.command == "channels-sync":
+            from san_tui.fabric import ConfigfsGate
+            from san_tui.release import read_token, sync_channels
+            import urllib.request
             token = ""
             token_file = os.environ.get("SAN_GITHUB_TOKEN_FILE", "")
             if token_file:
                 token = read_token(token_file)
-            return _print(fetch_and_apply(
-                paths,
-                tag=args.tag,
-                api=args.api,
-                token=token,
-            ))
+            api = args.api or os.environ.get("SAN_RELEASE_API", "")
+
+            def fetcher(channel):
+                from san_tui.release import CHANNELS, fetch_release
+                spec = CHANNELS[channel]
+                return fetch_release(
+                    api, "", token, urllib.request.build_opener(),
+                    asset=spec["asset"], asset_sum=spec["sum"],
+                )
+
+            return _print(sync_channels(paths, fetcher, gate=ConfigfsGate()))
+        if args.command == "release-undo":
+            from san_tui.release import undo_channel
+            return _print(undo_channel(paths, args.channel))
+        if args.command == "rescue-select":
+            from san_tui.rescue import select_boot
+            return _print(select_boot(paths))
+        if args.command == "rescue-undo":
+            from san_tui.rescue import arm_undo, select_boot
+            arm_undo(paths)
+            return _print(select_boot(paths))
+        if args.command == "latency-sample":
+            from san_tui.latency import sample_exports
+            return _print(sample_exports(paths, probe))
+        if args.command == "scsi-collect":
+            from san_tui.scsilog import collect_dmesg
+            return _print(collect_dmesg(paths))
+        if args.command == "ntp-apply":
+            from san_tui.ntp import apply_ntp
+            server = os.environ.get("SAN_NTP_SERVER", "ntp.ubuntu.com")
+            try:
+                timeout = float(os.environ.get("SAN_NTP_TIMEOUT", "1"))
+            except ValueError:
+                timeout = 1.0
+            return _print(apply_ntp(paths, server=server, timeout=timeout))
+        if args.command == "ntp-undo":
+            from san_tui.ntp import undo_ntp
+            return _print(undo_ntp(paths))
         if args.command == "ollama-advise":
             from san_tui.runtime import advise
             return _print(advise(paths))

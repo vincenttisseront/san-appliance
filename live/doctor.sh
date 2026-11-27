@@ -68,4 +68,60 @@ verify "http://archive.ubuntu.com/ubuntu/dists/noble/InRelease" "noble"
 verify "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease" "noble-updates"
 verify "http://security.ubuntu.com/ubuntu/dists/noble-security/InRelease" "noble-security"
 
+pin_file=$SCRIPT_DIR/rootfs/usr/share/san/kernel-pin
+[ -f "$pin_file" ] || fail "kernel pin missing"
+pin_value=$(tr -d '[:space:]' < "$pin_file")
+printf '%s\n' "$pin_value" | grep -Eq '^6\.8\.0-[0-9]+\.[0-9]+$' \
+    || fail "kernel pin leaves 6.8: ${pin_value}"
+
+generic_version() {
+    local url=$1 name=$2
+    local rel err sha pkg base found
+    rel=$(mktemp)
+    err=$(mktemp)
+    pkg=$(mktemp)
+    curl -4 -fsSL --max-time 30 --retry 3 --retry-delay 2 "$url" -o "$rel"
+    if ! gpgv --keyring "$KEYRING" "$rel" >"$err" 2>&1; then
+        cat "$err" >&2 || true
+        rm -f "$rel" "$err" "$pkg"
+        fail "APT signature check failed for ${name}"
+    fi
+    sha=$(SAN_INRELEASE="$rel" PYTHONPATH="$REPO_ROOT/live24/tui" python3 -c '
+import os
+from pathlib import Path
+from san_tui.kernelpin import packages_sha256
+print(packages_sha256(Path(os.environ["SAN_INRELEASE"]).read_text(encoding="utf-8")))
+') || {
+        rm -f "$rel" "$err" "$pkg"
+        fail "signed InRelease has no Packages.gz hash for ${name}"
+    }
+    rm -f "$rel" "$err"
+    base=${url%/InRelease}
+    curl -4 -fsSL --max-time 60 --retry 3 --retry-delay 2 \
+        "$base/main/binary-amd64/Packages.gz" -o "$pkg"
+    printf '%s  %s\n' "$sha" "$pkg" | sha256sum -c - >/dev/null \
+        || { rm -f "$pkg"; fail "Packages.gz hash mismatch for ${name}"; }
+    found=$(gzip -dc "$pkg" | SAN_PIN_STREAM=1 PYTHONPATH="$REPO_ROOT/live24/tui" python3 -c '
+import sys
+from san_tui.kernelpin import newest_generic
+print(newest_generic(sys.stdin.read()))
+') || { rm -f "$pkg"; fail "kernel package is not a 6.8 image in ${name}"; }
+    rm -f "$pkg"
+    printf '%s\n' "$found" | grep -Eq '^6\.8\.0-[0-9]+\.[0-9]+$' \
+        || fail "resolved kernel leaves 6.8: ${found}"
+    printf '%s\n' "$found"
+}
+
+updates=$(generic_version "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease" "noble-updates kernel")
+security=$(generic_version "http://security.ubuntu.com/ubuntu/dists/noble-security/InRelease" "noble-security kernel")
+resolved=$(PYTHONPATH="$REPO_ROOT/live24/tui" python3 - "$updates" "$security" << 'PY'
+import sys
+from san_tui.kernelpin import version_key
+versions = [item.strip() for item in sys.argv[1:] if item.strip()]
+print(max(versions, key=version_key))
+PY
+)
+[ "$resolved" = "$pin_value" ] || fail "kernel pin ${pin_value} is not the newest 6.8 image ${resolved}"
+ok "kernel pin ${pin_value} matches the newest Ubuntu 24.04 6.8 image"
+
 ok "ready to build"

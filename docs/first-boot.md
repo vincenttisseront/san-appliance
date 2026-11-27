@@ -12,3 +12,5 @@ Cette image ne formate rien et n'exporte rien tant qu'un support de conf n'a pas
 8. Le retour à la conf précédente est `san-tui rollback`. Les écrans de la TUI et la WebUI, si elle est présente, ne créent pas d'export.
 
 Ollama est un conseiller à côté. Sans `SAN_OLLAMA_ENDPOINT` dans `/etc/san/ollama.env`, il ne démarre pas. Il ne choisit qu'un profil déjà mesuré, un seul réglage, et il retire ce réglage si le p99 empire. Un échec de ce service ne coupe ni le réseau, ni iSCSI, ni le support de conf.
+
+NTP, le relevé d'erreurs SCSI, la latence par LUN, les canaux de mise à jour et l'image de secours démarrent sans formulaire. Un bouton de la WebUI ne fait qu'annuler un choix déjà fait. Leur échec ne coupe pas iSCSI.

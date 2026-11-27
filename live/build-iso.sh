@@ -67,6 +67,7 @@ install_sh=$REPO_ROOT/live24/tui/install.sh
 "$install_sh" "$ROOT"
 "$SCRIPT_DIR/install-webui.sh" "$ROOT"
 install -m 0644 "$SCRIPT_DIR/webui/front.mjs" "$ROOT/usr/lib/san-webui/front.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/boards.mjs" "$ROOT/usr/lib/san-webui/boards.mjs"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
 chmod 0755 \
@@ -84,7 +85,12 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
-    "$ROOT/usr/local/sbin/san-release-listen"
+    "$ROOT/usr/local/sbin/san-release-listen" \
+    "$ROOT/usr/local/sbin/san-channels" \
+    "$ROOT/usr/local/sbin/san-rescue" \
+    "$ROOT/usr/local/sbin/san-latency" \
+    "$ROOT/usr/local/sbin/san-scsi-log" \
+    "$ROOT/usr/local/sbin/san-ntp"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -133,7 +139,14 @@ systemctl --root="$ROOT" enable \
     san-ssh.service \
     san-webui-secrets.service \
     san-webui.service \
-    san-release.service
+    san-release.service \
+    san-channels.service \
+    san-rescue.service \
+    san-latency.service \
+    san-scsi-log.service \
+    san-ntp.service
+systemctl --root="$ROOT" disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
+systemctl --root="$ROOT" mask systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -185,6 +198,13 @@ PY
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
+if grep -R -l -E 'BEGIN (OPENSSH |RSA |EC |ENCRYPTED )?PRIVATE KEY' \
+    "$ROOT/usr" "$ROOT/etc" "$ROOT/var" 2>/dev/null | grep -q .; then
+    die "a private key is baked into the image"
+fi
+[ -f "$ROOT/usr/share/san/kernel-pin" ] || die "kernel pin missing from the image"
+grep -Eq '^6\.8\.0-[0-9]+\.[0-9]+$' "$ROOT/usr/share/san/kernel-pin" \
+    || die "kernel pin is not a 6.8 package"
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
 if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then
     die "san-webui.service must not launch server/index.mjs"

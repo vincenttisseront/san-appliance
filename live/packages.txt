@@ -24,5 +24,7 @@ mdadm
 lvm2
 openssh-server
 fio
+openssl
+systemd-timesyncd
 ethtool
 nvme-cli

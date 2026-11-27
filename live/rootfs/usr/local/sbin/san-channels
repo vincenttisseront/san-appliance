@@ -1,0 +1,5 @@
+#!/bin/sh
+# Canaux application et noyau. Un échec ne coupe pas iSCSI.
+set -eu
+/usr/local/sbin/san-tui channels-sync || true
+exit 0

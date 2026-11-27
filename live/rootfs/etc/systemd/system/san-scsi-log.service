@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect SCSI errors without LUN payload
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-scsi-log
+
+[Install]
+WantedBy=multi-user.target

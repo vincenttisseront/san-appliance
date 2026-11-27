@@ -1,0 +1,12 @@
+[Unit]
+Description=Start NTP without waiting for a synchronized clock
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-ntp
+
+[Install]
+WantedBy=multi-user.target
