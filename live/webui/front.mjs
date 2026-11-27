@@ -77,18 +77,27 @@ function page() {
 <main>
 <h1>Mise à jour de l'application</h1>
 <p>La release plus récente est appliquée toute seule quand aucune session n'écrit. Le diff est là pour être lu. Le slot le plus récent est marqué. Une demande de release depuis cette page exige le compte release. Le bouton ci-dessous annule seulement le dernier choix.</p>
+<p>Le boot applique une release plus récente si aucune session iSCSI n'écrit. L'empreinte est vérifiée avant écriture. Un échec laisse les exports en place. Cette page n'applique rien : elle affiche le journal et peut annuler le slot.</p>
 <ul>${rows}</ul>
 <h2>Diff</h2>
 <pre id="diff">${escapeHtml(diff)}</pre>
+<pre id="audit"></pre>
 <p><a href="/appliance-config">Télécharger la configuration</a></p>
 <p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
 <p><a href="/scsi-errors">Erreurs SCSI</a></p>
 <p><a href="/latency">Latence</a></p>
 <p><a href="/channels">Canaux</a></p>
+<p><a href="/exports">Exports iSCSI</a> · <a href="/nvme">NVMe-oF</a></p>
 <p><button id="undo" type="button">Revenir au slot précédent</button></p>
+<form id="rollback">
+<button type="submit">Revenir d'un slot</button>
+</form>
 <pre id="out"></pre>
 </main>
 <script>
+fetch("/appliance/audit").then((response) => response.text()).then((text) => {
+  document.getElementById("audit").textContent = text;
+});
 document.getElementById("undo").addEventListener("click", async () => {
   const out = document.getElementById("out");
   out.textContent = "en cours";
@@ -97,6 +106,12 @@ document.getElementById("undo").addEventListener("click", async () => {
     headers: {"content-type": "application/json"},
     body: JSON.stringify({undo: true})
   });
+  out.textContent = await response.text();
+});
+document.getElementById("rollback").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const out = document.getElementById("out");
+  const response = await fetch("/appliance-rollback", {method: "POST"});
   out.textContent = await response.text();
 });
 </script>
@@ -201,6 +216,29 @@ function proxy(req, res, sessionHeader) {
   req.pipe(upstream)
 }
 
+function publicText(text) {
+  return text.split('\n').filter((line) => {
+    const lower = line.toLowerCase()
+    return !lower.includes('password') && !lower.includes('chap_secret') && !lower.includes('token') && !lower.includes('nuxt_')
+  }).join('\n')
+}
+
+function inspectionPage(title, rows) {
+  const body = rows.map((row) => {
+    return [row.volume, row.lun, row.initiator, row.state, row.alert].map((cell) => String(cell ?? '')).join(' | ')
+  }).join('\n')
+  return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title></head><body><main><h1>${title}</h1><pre>${publicText(body) || 'rien à afficher'}</pre><p><a href="/appliance-update">Mise à jour</a></p></main></body></html>`
+}
+
+function statusRows(kind) {
+  try {
+    const data = JSON.parse(readText('/run/san/public-status.json') || '{}')
+    return Array.isArray(data[kind]) ? data[kind] : []
+  } catch {
+    return []
+  }
+}
+
 function askUpdater(body) {
   return new Promise((resolve) => {
     const client = net.connect({ host: '127.0.0.1', port: 9753 }, () => {
@@ -272,12 +310,35 @@ const server = https.createServer({ key, cert }, async (req, res) => {
   if (ended) sessions.delete(session.id)
   const header = ended ? sessionCookie('gone', 0) : sessionCookie(session.id, SESSION_SECONDS)
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method || '')
-  const ownWrite = pathOnly === '/appliance-update' || pathOnly === '/appliance-session/end'
+  const ownWrite = pathOnly === '/appliance-update' || pathOnly === '/appliance-session/end' || pathOnly === '/appliance-rollback'
   if (mutating && !ownWrite) {
     beginWrite()
+    res.on('finish', endWrite)
     res.on('close', endWrite)
   }
   try {
+    if (pathOnly === '/appliance/audit' && req.method === 'GET') {
+      applySession(res, session, ended)
+      const journal = publicText(readText(sanPath('var', 'lib', 'san', 'conf', 'app', 'audit.jsonl')))
+      send(res, 200, journal || 'aucune mise à jour\n', 'text/plain; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/exports' && req.method === 'GET') {
+      applySession(res, session, ended)
+      send(res, 200, inspectionPage('Exports iSCSI', statusRows('exports')), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/nvme' && req.method === 'GET') {
+      applySession(res, session, ended)
+      send(res, 200, inspectionPage('NVMe-oF', statusRows('nvme')), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/appliance-rollback' && req.method === 'POST') {
+      const answer = await askUpdater(JSON.stringify({ op: 'rollback' }))
+      applySession(res, session, ended)
+      send(res, 200, answer, 'application/json; charset=utf-8')
+      return
+    }
     if (pathOnly === '/appliance-audit' && req.method === 'GET') {
       const answer = auditResponse(process.env.SAN_AUDIT_FILE || '/run/san/audit-export.json')
       for (const [key, value] of Object.entries(answer.headers || {})) {
@@ -397,7 +458,7 @@ const server = https.createServer({ key, cert }, async (req, res) => {
           payload = JSON.stringify({ undo: true })
         } else if (parsed.undo === 'app' || parsed.undo === 'kernel') {
           payload = JSON.stringify({ undo: parsed.undo })
-        } else if (parsed.op === 'clear-scsi' || parsed.op === 'clear-latency') {
+        } else if (parsed.op === 'clear-scsi' || parsed.op === 'clear-latency' || parsed.op === 'rollback') {
           payload = JSON.stringify({ op: parsed.op })
         } else {
           const decision = handleAppliance({

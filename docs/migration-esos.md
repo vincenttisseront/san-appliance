@@ -1,6 +1,16 @@
 # Migration depuis ESOS
 
-Ce guide sert à relever une configuration ESOS avant d’en recréer les exports à la main. Il ne fournit pas d’import. Ni `scst.conf`, ni un export SCST, ni un binaire ESOS n’est chargé par une commande de ce dépôt.
+Ce guide sert à relever une configuration ESOS, puis à en reprendre cinq champs iSCSI. Il ne charge pas `scst.conf`.
+
+`san-tui esos-import --file releve.json` accepte seulement un objet JSON avec `iqn`, `lun`, `wwid`, `block_size` et `acl`. Un texte qui contient un handler SCST, `TARGET_DRIVER` ou le mot `scst` est refusé. L'import n'ouvre pas le volume : il enregistre le relevé. L'export n'est créé ensuite que si le WWID colle à un disque local qui n'est pas déjà ouvert par ESOS. Les deux côtés ne sont jamais écrivains en même temps.
+
+Exemple, sans secret :
+
+```json
+{"iqn":"iqn.2020-01.local.esos:disk","lun":0,"wwid":"naa.6001405abc","block_size":512,"acl":"iqn.2020-01.local.client:host"}
+```
+
+Le CHAP n'est pas dans ce fichier. Il est généré sur l'appliance, hors de l'ISO et des journaux.
 
 Référence lue : [quantum/esos](https://github.com/quantum/esos) `142e23aaa0f64020be998b53f9ee3079089c7986`. Les faits ci-dessous viennent de `etc/rc.d/rc.scst`, `tui/menu_targets.c`, `tui/menu_devices.c` et `etc/fstab`. Aucun script ESOS n’a été exécuté.
 
@@ -36,7 +46,7 @@ ls -l /dev/disk/by-id
 2. Sur la nouvelle appliance, créer la cible, le portail, le LUN, l’ACL et le CHAP à partir du relevé.
 3. Comparer IQN, numéro de LUN, WWID et taille de bloc avec le relevé avant d’autoriser un initiateur.
 4. Un écart sur l’un de ces quatre points : ne pas activer la cible. Corriger ou revenir à ESOS.
-5. Il n’y a pas d’outil d’import SCST à lancer, ni vers LIO, ni vers l’image 26.04.
+5. Il n’y a pas d’outil d’import SCST à lancer, ni vers LIO, ni vers l’image 26.04. Le seul import est le JSON limité décrit au début de ce guide.
 
 ## Retour arrière
 
@@ -50,7 +60,7 @@ Le média ESOS reste intact pendant l’essai. `install.sh` peut avoir conservé
 
 ## Ce que cette branche ne fait pas
 
-Aucun outil de ce dépôt n'importe `scst.conf`, un handler SCST, ni un binaire ESOS. LIO ne lit pas cette conf. Il n'y a pas de volume ouvert en écriture des deux côtés, même le temps d'une bascule. Le retour à la conf précédente de l'appliance 24.04 est `san-tui rollback` : il reprend la sauvegarde versionnée, il ne crée pas une cible.
+Aucun outil de ce dépôt n'importe `scst.conf`, un handler SCST, ni un binaire ESOS. LIO ne lit pas cette conf. Le JSON limité ci-dessus ne transporte que l'IQN, le numéro de LUN, le WWID, la taille de bloc et l'ACL. Il n'y a pas de volume ouvert en écriture des deux côtés, même le temps d'une bascule. Le retour à la conf précédente de l'appliance 24.04 est `san-tui rollback` : il reprend la sauvegarde versionnée seulement si les identifiants de volume collent encore, et il ne crée pas une cible.
 
 ## Un seul écrivain
 

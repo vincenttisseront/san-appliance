@@ -1,0 +1,13 @@
+[Unit]
+Description=Contrôle le portail iSCSI et publie la vue WebUI
+After=san-restore.service san-release-boot.service
+Before=san-webui.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-release-health
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

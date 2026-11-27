@@ -116,7 +116,11 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-crypt" \
     "$ROOT/usr/local/sbin/san-chap-rotate" \
     "$ROOT/usr/local/sbin/san-portal-watch" \
-    "$ROOT/usr/local/sbin/san-lacp"
+    "$ROOT/usr/local/sbin/san-lacp" \
+    "$ROOT/usr/local/sbin/san-auto-boot" \
+    "$ROOT/usr/local/sbin/san-auto-layout" \
+    "$ROOT/usr/local/sbin/san-release-boot" \
+    "$ROOT/usr/local/sbin/san-release-health"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -194,7 +198,11 @@ systemctl --root="$ROOT" enable \
     san-crypt.service \
     san-chap-rotate.timer \
     san-portal-watch.service \
-    san-lacp.service
+    san-lacp.service \
+    san-auto.service \
+    san-auto-layout.service \
+    san-release-boot.service \
+    san-release-health.service
 systemctl --root="$ROOT" disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
 systemctl --root="$ROOT" mask systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
@@ -245,6 +253,10 @@ if "uring" in names or "io_uring" in names:
     text = "rtslib-fb expose un paramètre io_uring."
 Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
+install -d -m 0755 "$ROOT/usr/lib/san-app/image"
+printf '0\n' > "$ROOT/usr/lib/san-app/image/version"
+printf '%s\n' '#!/bin/sh' 'set -eu' 'test -s "$(dirname "$0")/version"' > "$ROOT/usr/lib/san-app/image/health"
+chmod 0755 "$ROOT/usr/lib/san-app/image/health"
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
 [ ! -e "$ROOT/var/lib/san/webui/tls/key.pem" ] || die "webui private key is baked into the image"
@@ -319,9 +331,9 @@ printf '%s  %s\n' "$sha" "$(basename "$ISO")" > "$ISO.sha256"
     sha256sum -c "$(basename "$ISO.sha256")"
 )
 
-git_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+git_commit=$(git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty=false
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
+if [ -n "$(git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
     git_dirty=true
 fi
 built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)

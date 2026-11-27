@@ -81,7 +81,14 @@ def _plain(network):
             print("san-net-apply: interface absente {}".format(iface))
             continue
         subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-        subprocess.run(["ip", "link", "set", iface, "mtu", "1500"], check=False)
+        mtu = item.get("mtu")
+        peer = item.get("peer_mtu")
+        # 9000 seulement si les deux extrémités l'annoncent. Sinon 1500.
+        if mtu == 9000 and peer == 9000:
+            chosen = "9000"
+        else:
+            chosen = "1500"
+        subprocess.run(["ip", "link", "set", iface, "mtu", chosen], check=False)
         subprocess.run(["ip", "addr", "replace", address, "dev", iface], check=False)
         print("san-net-apply: {} {} dev {}".format(role, address, iface))
 

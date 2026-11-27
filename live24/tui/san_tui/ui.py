@@ -20,7 +20,7 @@ SCREENS = (
 
 def screen_lines(name, snap, paths):
     if name == "Disques":
-        lines = ["Inventaire seulement. Aucun disque n'est exporté ni formaté.", ""]
+        lines = ["Inventaire. Le boot choisit le disque de données. Cet écran n'écrit rien.", ""]
         if not snap["disks"]:
             lines.append("Aucun volume avec identifiant by-id.")
         for disk in snap["disks"]:
@@ -56,7 +56,7 @@ def screen_lines(name, snap, paths):
         except Exception as exc:
             return ["conf illisible : {}".format(exc.__class__.__name__)]
         if not document:
-            return ["Aucun export enregistré. Cet écran n'exporte rien. Retour : san-tui rollback."]
+            return ["Aucun export enregistré. Le boot en crée un quand un initiateur a été vu. Annulation : san-tui rollback."]
         lines = []
         for target in document.get("targets") or []:
             acls = target.get("acls") or [{}]
@@ -120,8 +120,8 @@ def _network_lines(paths, role):
     plan = _read_json(paths.etc / "network.json") or {}
     item = plan.get(role) or {}
     if not item:
-        return ["Non choisi. Utiliser san-tui network-set. Rien n'est appliqué ici."]
-    return ["interface {}".format(item.get("iface")), "adresse {}".format(item.get("address"))]
+        return ["Pas encore choisi. Le boot le fera. Annulation : san-tui rollback."]
+    return ["Choisi au boot : {}".format(item.get("iface")), "adresse {}".format(item.get("address") or "en attente")]
 
 
 def run_tui(paths, probe):

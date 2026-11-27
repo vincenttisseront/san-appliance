@@ -301,11 +301,11 @@ class ReleaseTests(unittest.TestCase):
         status = public_asset_status()
         self.assertIn("present", status)
         if status["present"]:
-            archive_blob, checksum_text = fetch_release("", "", "")
+            archive_blob, checksum_text, _signature = fetch_release("", "", "")
             source = "github"
         else:
             self.assertTrue(status["reason"])
-            archive_blob, checksum_text = _standin_release()
+            archive_blob, checksum_text, _signature = _standin_release()
             source = "local-stand-in"
         digest = verify_archive(archive_blob, parse_checksum(checksum_text, ASSET))
         self.assertEqual(digest, hashlib.sha256(archive_blob).hexdigest())

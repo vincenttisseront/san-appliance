@@ -1,0 +1,5 @@
+#!/bin/sh
+# Release plus récente. Le téléchargement peut échouer : iSCSI continue.
+set +e
+/usr/local/sbin/san-tui release-boot
+exit 0

@@ -1,0 +1,14 @@
+[Unit]
+Description=Choisit le disque de données et le réseau, sans menu
+DefaultDependencies=no
+After=san-live-boot.service
+Before=san-conf-bind.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-auto-boot
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

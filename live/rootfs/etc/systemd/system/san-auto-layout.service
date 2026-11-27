@@ -1,0 +1,13 @@
+[Unit]
+Description=Enregistre RAID, LVM et exports absents
+After=san-conf-bind.service
+Before=san-raid.service san-lvm.service san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-auto-layout
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

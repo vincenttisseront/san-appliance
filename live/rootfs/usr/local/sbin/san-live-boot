@@ -22,6 +22,7 @@ if [ "$mode" = diagnostic ]; then
         san-quota.service san-snapshot.service san-clone.service \
         san-thin.service san-crypt.service san-lacp.service \
         san-portal-watch.service san-chap-rotate.timer \
+        san-auto.service san-auto-layout.service san-release-boot.service \
         >/dev/null 2>&1 || true
 fi
 

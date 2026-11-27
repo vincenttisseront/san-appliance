@@ -1,0 +1,5 @@
+#!/bin/sh
+# Choix du disque et du réseau. Un échec ne doit pas empêcher la suite.
+set +e
+/usr/local/sbin/san-tui auto-boot
+exit 0

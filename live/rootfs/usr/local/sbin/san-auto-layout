@@ -1,0 +1,5 @@
+#!/bin/sh
+# RAID, LVM et exports manquants. Un échec laisse iSCSI démarrer ensuite.
+set +e
+/usr/local/sbin/san-tui auto-layout
+exit 0
