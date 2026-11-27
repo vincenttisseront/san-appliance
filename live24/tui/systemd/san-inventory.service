@@ -8,7 +8,7 @@ Before=san-restore.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/san-tui inventory
+ExecStart=/usr/local/sbin/san-tui boot-inventory
 
 [Install]
 WantedBy=multi-user.target

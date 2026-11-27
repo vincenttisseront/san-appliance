@@ -11,6 +11,7 @@ sudo
 locales
 iproute2
 ca-certificates
+openssl
 e2fsprogs
 eject
 dbus
@@ -23,6 +24,7 @@ open-iscsi
 mdadm
 lvm2
 openssh-server
+rsyslog
 fio
 openssl
 systemd-timesyncd

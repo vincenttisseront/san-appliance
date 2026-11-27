@@ -1,0 +1,12 @@
+[Unit]
+Description=Retire un disque de données en échec
+After=san-inventory.service san-conf-bind.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-retire
+
+[Install]
+WantedBy=multi-user.target

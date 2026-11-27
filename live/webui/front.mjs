@@ -1,69 +1,195 @@
 /**
- * Loopback front for the WebUI. Nitro stays on 127.0.0.1:3010.
- * Appliance pages are served here. The updater on 127.0.0.1:9753 only undoes.
+ * Loopback HTTPS front for the WebUI.
+ * The certificate is read from /var/lib/san/webui/tls, created at boot, outside the ISO.
+ * Nitro stays on 127.0.0.1:3010. This process owns 127.0.0.1:3000.
+ * A release download or this process failing does not stop iSCSI: that path is another service.
  */
 import http from 'node:http'
+import https from 'node:https'
 import fs from 'node:fs'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
+import crypto from 'node:crypto'
+import { auditResponse } from './audit-route.mjs'
+import { handleAppliance } from './guard.mjs'
+import { SESSION_SECONDS, capSetCookie, createSession, readCookie, sessionCookie, touchSession } from './session.mjs'
+import { newestSlot } from './status.mjs'
 import { renderChannels, renderLatency, renderScsi } from './boards.mjs'
 
-const BOARDS = '/var/lib/san/webui/boards'
-const APP_STATE = '/var/lib/san/conf/app/state.json'
-const KERNEL_STATE = '/var/lib/san/conf/kernel/state.json'
+const testMode = process.env.SAN_FRONT_TEST === '1'
+const listenPort = Number(process.env.SAN_FRONT_PORT || 3000)
+const upstreamPort = Number(process.env.SAN_UPSTREAM_PORT || 3010)
 
-function readJson(path, fallback) {
+function sanPath(...parts) {
+  return path.join(process.env.SAN_ROOT || '/', ...parts)
+}
+
+const tlsKey = process.env.SAN_TLS_KEY || sanPath('var', 'lib', 'san', 'webui', 'tls', 'key.pem')
+const tlsCert = process.env.SAN_TLS_CERT || sanPath('var', 'lib', 'san', 'webui', 'tls', 'cert.pem')
+const configFile = process.env.SAN_CONFIG_FILE || sanPath('var', 'lib', 'san', 'conf', 'san-config.json')
+const stateFile = sanPath('var', 'lib', 'san', 'conf', 'app', 'state.json')
+const diffFile = sanPath('var', 'lib', 'san', 'conf', 'app', 'diff.txt')
+const writingFile = sanPath('var', 'lib', 'san', 'webui', 'writing')
+
+const sessions = new Map()
+
+function readText(file) {
   try {
-    return JSON.parse(fs.readFileSync(path, 'utf8'))
+    return fs.readFileSync(file, 'utf8')
   } catch {
-    return fallback
+    return ''
   }
 }
 
-function channelView(path) {
-  const state = readJson(path, null)
-  if (!state || typeof state !== 'object') {
-    return {}
-  }
-  const active = state.active
-  const slot = (state.slots && state.slots[active]) || {}
-  return {
-    active,
-    previous: state.previous || null,
-    p99_us: slot.p99_us,
-    kernel: slot.kernel || '',
-    signed: Boolean(state.signature),
-    signing_gap: state.signing_gap || '',
+function loadState() {
+  const text = readText(stateFile)
+  if (!text) return { active: null, slots: { a: {}, b: {} } }
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed : { active: null, slots: {} }
+  } catch {
+    return { active: null, slots: {}, error: 'état illisible' }
   }
 }
 
-const childEnv = {
-  ...process.env,
-  NITRO_HOST: '127.0.0.1',
-  HOST: '127.0.0.1',
-  NUXT_HOST: '127.0.0.1',
-  NITRO_PORT: '3010',
-  NUXT_PORT: '3010',
-  PORT: '3010',
+function page() {
+  const state = loadState()
+  const newest = newestSlot(state)
+  const slots = state.slots || {}
+  const rows = ['a', 'b'].map((name) => {
+    const info = slots[name] || {}
+    const when = info.installed || 'sans date'
+    const marks = []
+    if (state.active === name) marks.push('actif')
+    if (newest === name) marks.push('le plus récent')
+    const mark = marks.length ? marks.join(', ') : 'inactif'
+    return `<li>slot ${name} — ${when} — ${mark}</li>`
+  }).join('')
+  const diff = readText(diffFile) || 'aucun diff'
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Mise à jour SAN</title>
+</head>
+<body>
+<main>
+<h1>Mise à jour de l'application</h1>
+<p>La release plus récente est appliquée toute seule quand aucune session n'écrit. Le diff est là pour être lu. Le slot le plus récent est marqué. Une demande de release depuis cette page exige le compte release. Le bouton ci-dessous annule seulement le dernier choix.</p>
+<ul>${rows}</ul>
+<h2>Diff</h2>
+<pre id="diff">${escapeHtml(diff)}</pre>
+<p><a href="/appliance-config">Télécharger la configuration</a></p>
+<p><a href="/appliance-audit"><button type="button">Télécharger l'audit</button></a></p>
+<p><a href="/scsi-errors">Erreurs SCSI</a></p>
+<p><a href="/latency">Latence</a></p>
+<p><a href="/channels">Canaux</a></p>
+<p><button id="undo" type="button">Revenir au slot précédent</button></p>
+<pre id="out"></pre>
+</main>
+<script>
+document.getElementById("undo").addEventListener("click", async () => {
+  const out = document.getElementById("out");
+  out.textContent = "en cours";
+  const response = await fetch("/appliance-update", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({undo: true})
+  });
+  out.textContent = await response.text();
+});
+</script>
+</body>
+</html>
+`
 }
-const child = spawn('/usr/bin/node', ['/usr/lib/san-webui/scripts/serve-local.mjs'], {
-  env: childEnv,
-  stdio: 'inherit',
-})
-child.on('exit', (code) => {
-  process.exit(code == null ? 1 : code)
-})
 
-function proxy(req, res) {
-  const headers = { ...req.headers, host: '127.0.0.1:3010' }
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function currentSession(req, now) {
+  const id = readCookie(req.headers.cookie, 'san_session')
+  const known = id ? sessions.get(id) : null
+  const touched = touchSession(known, now)
+  if (touched) {
+    sessions.set(touched.id, touched)
+    return touched
+  }
+  if (id) sessions.delete(id)
+  const created = createSession(crypto.randomBytes(18).toString('hex'), now)
+  sessions.set(created.id, created)
+  return created
+}
+
+function applySession(res, session, ended) {
+  const header = ended ? sessionCookie('gone', 0) : sessionCookie(session.id, SESSION_SECONDS)
+  const existing = res.getHeader('set-cookie')
+  const list = existing == null ? [] : (Array.isArray(existing) ? existing : [existing])
+  res.setHeader('set-cookie', [...list.map((item) => capSetCookie(String(item))), header])
+}
+
+function beginWrite() {
+  fs.mkdirSync(path.dirname(writingFile), { recursive: true })
+  fs.writeFileSync(writingFile, '1\n')
+}
+
+function endWrite() {
+  try {
+    fs.unlinkSync(writingFile)
+  } catch {
+    // already gone
+  }
+}
+
+function isLocal(req) {
+  const local = req.socket.localAddress
+  return local === '127.0.0.1' || local === '::ffff:127.0.0.1'
+}
+
+function send(res, status, body, type) {
+  res.writeHead(status, { 'content-type': type })
+  res.end(body)
+}
+
+if (!testMode) {
+  const childEnv = {
+    ...process.env,
+    NITRO_HOST: '127.0.0.1',
+    HOST: '127.0.0.1',
+    NUXT_HOST: '127.0.0.1',
+    NITRO_PORT: String(upstreamPort),
+    NUXT_PORT: String(upstreamPort),
+    PORT: String(upstreamPort),
+  }
+  const child = spawn('/usr/bin/node', ['/usr/lib/san-webui/scripts/serve-local.mjs'], {
+    env: childEnv,
+    stdio: 'inherit',
+  })
+  child.on('exit', (code) => {
+    process.exit(code == null ? 1 : code)
+  })
+}
+
+function proxy(req, res, sessionHeader) {
+  const headers = { ...req.headers, host: `127.0.0.1:${upstreamPort}` }
   const upstream = http.request({
     hostname: '127.0.0.1',
-    port: 3010,
+    port: upstreamPort,
     path: req.url,
     method: req.method,
     headers,
   }, (incoming) => {
-    res.writeHead(incoming.statusCode || 502, incoming.headers)
+    const forwarded = { ...incoming.headers }
+    const cookies = forwarded['set-cookie']
+      ? (Array.isArray(forwarded['set-cookie']) ? forwarded['set-cookie'] : [forwarded['set-cookie']])
+      : []
+    forwarded['set-cookie'] = [...cookies.map((item) => capSetCookie(String(item))), sessionHeader]
+    res.writeHead(incoming.statusCode || 502, forwarded)
     incoming.pipe(res)
   })
   upstream.on('error', () => {
@@ -87,93 +213,228 @@ function askUpdater(body) {
   })
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    let size = 0
-    req.on('data', (chunk) => {
-      size += chunk.length
-      if (size > 8192) {
-        reject(Object.assign(new Error('too big'), { status: 413 }))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    req.on('error', reject)
-  })
+const ROLES_PATH = process.env.SAN_WEBUI_ROLES || '/run/san/webui-roles.json'
+const LOCK_PATH = process.env.SAN_WEBUI_LOCK || '/var/lib/san/webui/lock.json'
+
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return fallback
+  }
 }
 
-function html(res, body) {
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-  res.end(body)
+function writeLock(lock) {
+  try {
+    fs.mkdirSync(LOCK_PATH.replace(/\/[^/]+$/, ''), { recursive: true })
+    fs.writeFileSync(LOCK_PATH, JSON.stringify(lock) + '\n', { mode: 0o640 })
+  } catch {
+    // Un verrou illisible ne doit pas arrêter la page, ni iSCSI.
+  }
 }
 
-const server = http.createServer(async (req, res) => {
-  const local = req.socket.localAddress
-  if (local !== '127.0.0.1' && local !== '::ffff:127.0.0.1') {
+
+function channelView(file) {
+  const state = readJson(file, null)
+  if (!state || typeof state !== 'object') return {}
+  const active = state.active
+  const slot = (state.slots && state.slots[active]) || {}
+  return {
+    active,
+    previous: state.previous || null,
+    p99_us: slot.p99_us,
+    kernel: slot.kernel || '',
+    signed: Boolean(state.signature),
+    signing_gap: state.signing_gap || '',
+  }
+}
+
+let key
+let cert
+try {
+  key = fs.readFileSync(tlsKey)
+  cert = fs.readFileSync(tlsCert)
+} catch (err) {
+  process.stderr.write(`certificat WebUI absent: ${err.message}\n`)
+  process.exit(1)
+}
+
+const server = https.createServer({ key, cert }, async (req, res) => {
+  if (!isLocal(req)) {
     res.writeHead(403)
     res.end()
     return
   }
-  const path = (req.url || '/').split('?')[0]
-  if (path === '/scsi-errors' && req.method === 'GET') {
-    html(res, renderScsi(readJson(`${BOARDS}/scsi-errors.json`, [])))
-    return
+  const now = Date.now()
+  const pathOnly = (req.url || '/').split('?')[0]
+  const ended = pathOnly === '/appliance-session/end' && req.method === 'POST'
+  const session = currentSession(req, now)
+  if (ended) sessions.delete(session.id)
+  const header = ended ? sessionCookie('gone', 0) : sessionCookie(session.id, SESSION_SECONDS)
+  const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method || '')
+  const ownWrite = pathOnly === '/appliance-update' || pathOnly === '/appliance-session/end'
+  if (mutating && !ownWrite) {
+    beginWrite()
+    res.on('close', endWrite)
   }
-  if (path === '/latency' && req.method === 'GET') {
-    html(res, renderLatency(readJson(`${BOARDS}/latency.json`, { global_p99_us: null, luns: [] })))
-    return
-  }
-  if (path === '/appliance-update' && req.method === 'GET') {
-    html(res, renderChannels({
-      channels: { app: channelView(APP_STATE), kernel: channelView(KERNEL_STATE) },
-    }))
-    return
-  }
-  if ((path === '/scsi-errors' || path === '/latency' || path === '/appliance-update') && req.method === 'POST') {
-    let raw = ''
-    try {
-      raw = await readBody(req)
-    } catch (err) {
-      res.writeHead(err.status || 400)
-      res.end()
+  try {
+    if (pathOnly === '/appliance-audit' && req.method === 'GET') {
+      const answer = auditResponse(process.env.SAN_AUDIT_FILE || '/run/san/audit-export.json')
+      for (const [key, value] of Object.entries(answer.headers || {})) {
+        res.setHeader(key, value)
+      }
+      applySession(res, session, ended)
+      res.writeHead(answer.status)
+      res.end(answer.body)
       return
     }
-    let payload = {}
-    const contentType = String(req.headers['content-type'] || '')
-    if (contentType.includes('application/json') && raw) {
-      try {
-        payload = JSON.parse(raw)
-      } catch {
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end('{"applied":false,"error":"demande refusée"}\n')
+    if (pathOnly === '/scsi-errors' && req.method === 'GET') {
+      const board = process.env.SAN_SCSI_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'scsi-errors.json')
+      applySession(res, session, ended)
+      send(res, 200, renderScsi(readJson(board, [])), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/latency' && req.method === 'GET') {
+      const board = process.env.SAN_LATENCY_BOARD || sanPath('var', 'lib', 'san', 'webui', 'boards', 'latency.json')
+      applySession(res, session, ended)
+      send(res, 200, renderLatency(readJson(board, { global_p99_us: null, luns: [] })), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/channels' && req.method === 'GET') {
+      applySession(res, session, ended)
+      send(res, 200, renderChannels({
+        channels: {
+          app: channelView(sanPath('var', 'lib', 'san', 'conf', 'app', 'state.json')),
+          kernel: channelView(sanPath('var', 'lib', 'san', 'conf', 'kernel', 'state.json')),
+        },
+      }), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/appliance-update' && req.method === 'GET') {
+      applySession(res, session, ended)
+      send(res, 200, page(), 'text/html; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/appliance-status' && req.method === 'GET') {
+      const state = loadState()
+      applySession(res, session, ended)
+      send(res, 200, JSON.stringify({
+        active: state.active || null,
+        newest: newestSlot(state),
+        slots: state.slots || {},
+        diff: readText(diffFile),
+      }), 'application/json; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/appliance-config' && req.method === 'GET') {
+      if (!fs.existsSync(configFile)) {
+        applySession(res, session, ended)
+        send(res, 404, '{"error":"export pas encore construit"}\n', 'application/json; charset=utf-8')
         return
       }
-    } else if (raw.includes('undo=')) {
-      const params = new URLSearchParams(raw)
-      payload = { undo: params.get('undo') || '' }
-    }
-    if (payload.token || payload.github_token || payload.tag) {
-      res.writeHead(400, { 'content-type': 'application/json' })
-      res.end('{"applied":false,"error":"la mise à jour est automatique"}\n')
+      const body = fs.readFileSync(configFile)
+      applySession(res, session, ended)
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-disposition': 'attachment; filename="san-config.json"',
+      })
+      res.end(body)
       return
     }
-    let message = {}
-    if (path === '/scsi-errors') message = { op: 'clear-scsi' }
-    else if (path === '/latency') message = { op: 'clear-latency' }
-    else if (payload.undo === 'app' || payload.undo === 'kernel') message = { undo: payload.undo }
-    else {
-      res.writeHead(400, { 'content-type': 'application/json' })
-      res.end('{"applied":false,"error":"demande refusée"}\n')
+    if (pathOnly === '/appliance-session/end' && req.method === 'POST') {
+      applySession(res, session, true)
+      send(res, 200, '{"ended":true}\n', 'application/json; charset=utf-8')
       return
     }
-    const answer = await askUpdater(JSON.stringify(message))
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(answer)
-    return
+    if ((pathOnly === '/scsi-errors' || pathOnly === '/latency' || pathOnly === '/channels') && req.method === 'POST') {
+      const op = pathOnly === '/scsi-errors' ? 'clear-scsi' : (pathOnly === '/latency' ? 'clear-latency' : '')
+      let undo = ''
+      if (pathOnly === '/channels') {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const raw = Buffer.concat(chunks).toString('utf8')
+        try {
+          const parsed = JSON.parse(raw || '{}')
+          undo = parsed.undo || ''
+        } catch {
+          const params = new URLSearchParams(raw)
+          undo = params.get('undo') || ''
+        }
+        if (undo !== 'app' && undo !== 'kernel') {
+          applySession(res, session, ended)
+          send(res, 400, '{"applied":false,"error":"demande refusée"}\n', 'application/json')
+          return
+        }
+      }
+      const message = op ? { op } : { undo }
+      const answer = await askUpdater(JSON.stringify(message))
+      applySession(res, session, ended)
+      send(res, 200, answer, 'application/json; charset=utf-8')
+      return
+    }
+    if (pathOnly === '/appliance-update' && req.method === 'POST') {
+      const chunks = []
+      let size = 0
+      for await (const chunk of req) {
+        size += chunk.length
+        if (size > 8192) {
+          applySession(res, session, ended)
+          res.writeHead(413)
+          res.end()
+          return
+        }
+        chunks.push(chunk)
+      }
+      let payload = Buffer.concat(chunks).toString('utf8')
+      try {
+        const parsed = JSON.parse(payload || '{}')
+        if (parsed.token || parsed.github_token) {
+          applySession(res, session, ended)
+          send(res, 400, '{"applied":false,"error":"jeton refusé dans la demande"}\n', 'application/json')
+          return
+        }
+        if (parsed.undo === true) {
+          payload = JSON.stringify({ undo: true })
+        } else if (parsed.undo === 'app' || parsed.undo === 'kernel') {
+          payload = JSON.stringify({ undo: parsed.undo })
+        } else if (parsed.op === 'clear-scsi' || parsed.op === 'clear-latency') {
+          payload = JSON.stringify({ op: parsed.op })
+        } else {
+          const decision = handleAppliance({
+            method: 'POST',
+            authorization: req.headers.authorization,
+            roles: readJson(ROLES_PATH, {}),
+            lock: readJson(LOCK_PATH, {}),
+            now: Date.now(),
+          })
+          writeLock(decision.lock)
+          if (!decision.allow) {
+            applySession(res, session, ended)
+            send(res, decision.status, JSON.stringify({ applied: false, error: decision.error || 'refusé' }) + '\n', 'application/json; charset=utf-8')
+            return
+          }
+          applySession(res, session, ended)
+          send(res, 400, '{"applied":false,"error":"la mise à jour est automatique"}\n', 'application/json')
+          return
+        }
+      } catch {
+        applySession(res, session, ended)
+        send(res, 400, '{"applied":false,"error":"demande refusée"}\n', 'application/json')
+        return
+      }
+      const answer = await askUpdater(payload)
+      applySession(res, session, ended)
+      send(res, 200, answer, 'application/json; charset=utf-8')
+      return
+    }
+    proxy(req, res, header)
+  } catch (err) {
+    if (!res.headersSent) {
+      applySession(res, session, ended)
+      send(res, 500, 'erreur\n', 'text/plain; charset=utf-8')
+    }
+    throw err
   }
-  proxy(req, res)
 })
 
-server.listen(3000, '127.0.0.1')
+server.listen(listenPort, '127.0.0.1')

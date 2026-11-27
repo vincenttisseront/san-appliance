@@ -17,7 +17,14 @@ SEC_CODE = Path("/usr/share/OVMF/OVMF_CODE_4M.secboot.fd")
 SEC_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.ms.fd")
 
 
-def wait_marker(port, timeout):
+REQUIRED = (
+    b"san-live: mode=live",
+    b"san-inventory: written",
+    b"san-syslog: local",
+)
+
+
+def wait_marker(port, timeout, required=REQUIRED):
     deadline = time.time() + timeout
     buf = b""
     sock = None
@@ -30,7 +37,7 @@ def wait_marker(port, timeout):
     if sock is None:
         return False, "série fermée"
     while time.time() < deadline:
-        if b"san-live: mode=live" in buf:
+        if all(item in buf for item in required):
             sock.close()
             return True, "san-live"
         try:
@@ -42,10 +49,13 @@ def wait_marker(port, timeout):
             continue
         buf += chunk
     sock.close()
+    missing = [item.decode() for item in required if item not in buf]
+    if missing:
+        return False, "manque " + ",".join(missing)
     return False, "marqueur absent"
 
 
-def run_case(name, extra, port, timeout):
+def run_case(name, extra, port, timeout, required=REQUIRED):
     work = Path("/var/tmp/san-boot-matrix") / name
     if work.exists():
         shutil.rmtree(work)
@@ -59,7 +69,7 @@ def run_case(name, extra, port, timeout):
     handle = open(work / "qemu.err", "w", encoding="utf-8")
     proc = subprocess.Popen(args, stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
     try:
-        ok, detail = wait_marker(port, timeout)
+        ok, detail = wait_marker(port, timeout, required)
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -111,6 +121,7 @@ def main():
             firmware(SEC_CODE, SEC_VARS, work / "secboot.vars") + cd,
             4725,
             90,
+            required=(b"san-live: mode=live",),
         )
         report["cases"].append(sec)
         if sec["reached_userspace"]:

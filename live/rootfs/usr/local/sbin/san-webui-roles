@@ -1,0 +1,42 @@
+#!/bin/sh
+# Mots de passe créés au boot, affichés une fois sur la série. Absents de l'ISO.
+dest=/run/san/webui-roles.json
+if [ -f "$dest" ]; then
+    exit 0
+fi
+mkdir -p /run/san
+python3 - << 'PY' || exit 0
+import json
+import os
+import secrets
+
+doc = {
+    "viewer": {"user": "viewer", "password": secrets.token_hex(8)},
+    "release": {"user": "release", "password": secrets.token_hex(8)},
+}
+path = "/run/san/webui-roles.json"
+fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o640)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(doc, handle)
+    handle.write("\n")
+line = "san-webui: viewer=viewer password={v} release=release password={r}\n".format(
+    v=doc["viewer"]["password"],
+    r=doc["release"]["password"],
+)
+try:
+    serial = os.open("/dev/ttyS0", os.O_WRONLY | os.O_NONBLOCK)
+except OSError:
+    serial = None
+if serial is not None:
+    try:
+        os.write(serial, line.encode())
+    except OSError:
+        pass
+    finally:
+        os.close(serial)
+PY
+if [ -f "$dest" ]; then
+    chown sanui:sanui "$dest" 2>/dev/null || true
+    chmod 0640 "$dest" 2>/dev/null || true
+fi
+exit 0
