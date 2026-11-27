@@ -1,0 +1,12 @@
+[Unit]
+Description=Boot the rescue image when the active slot does not start
+After=san-conf-bind.service
+Before=san-channels.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-rescue
+
+[Install]
+WantedBy=multi-user.target

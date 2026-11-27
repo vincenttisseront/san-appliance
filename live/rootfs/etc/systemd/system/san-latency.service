@@ -1,0 +1,11 @@
+[Unit]
+Description=Per-LUN p99 sample
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-latency
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+#!/bin/sh
+# NTP automatique. Le journal local est écrit même si le serveur ne répond pas.
+# systemd-time-wait-sync n'est pas appelé : il bloquerait le démarrage.
+set -eu
+/usr/local/sbin/san-tui ntp-apply || true
+if [ -f /etc/san/ntp-undo ]; then
+    systemctl disable --now systemd-timesyncd.service >/dev/null 2>&1 || true
+    exit 0
+fi
+systemctl enable systemd-timesyncd.service >/dev/null 2>&1 || true
+systemctl start systemd-timesyncd.service >/dev/null 2>&1 || true
+exit 0

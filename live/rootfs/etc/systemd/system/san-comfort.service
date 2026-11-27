@@ -1,0 +1,12 @@
+[Unit]
+Description=Réplication, témoin, groupes, QoS, audit et latence
+After=san-restore.service
+Wants=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-comfort
+
+[Install]
+WantedBy=multi-user.target

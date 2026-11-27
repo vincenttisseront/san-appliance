@@ -1,8 +1,8 @@
 [Unit]
 Description=SAN WebUI (loopback only)
-After=network-online.target san-webui-secrets.service san-release.service
+After=network-online.target san-webui-secrets.service san-webui-roles.service san-webui-cert.service san-release.service
 Requires=san-webui-secrets.service
-Wants=network-online.target san-release.service
+Wants=network-online.target san-webui-roles.service san-webui-cert.service san-release.service
 
 [Service]
 Type=simple
@@ -16,7 +16,7 @@ Environment=HOST=127.0.0.1
 Environment=NITRO_PORT=3000
 Environment=NUXT_HOST=127.0.0.1
 Environment=NUXT_PORT=3000
-Environment=NUXT_COOKIE_SECURE=false
+Environment=NUXT_COOKIE_SECURE=true
 Environment=DB_PATH=/var/lib/san/webui/esos-webui.db
 Environment=AUTH_HEADER_ENABLED=false
 Environment=AUTH_HEADER_TRUST_WITHOUT_TOKEN=false

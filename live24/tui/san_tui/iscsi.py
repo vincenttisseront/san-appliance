@@ -9,8 +9,11 @@ from san_tui.alerts import add_alert
 from san_tui.auto import undone
 from san_tui.identity import identity_problem
 from san_tui.link import attach_dns, lookup_name
+from san_tui.mask import mask_targets
+from san_tui.mode import enter_diagnostic
 from san_tui.persist import PersistError, load_choice, load_exports, save_exports
 from san_tui.portals import bind_address, iser_module_present, modules_dir, serving_portals
+from san_tui.retire import retired_ids
 from san_tui.safety import SafetyError, assert_usable, check_portal, describe_action, require_confirmation
 
 
@@ -98,31 +101,48 @@ def restore(paths, probe, backend):
     try:
         choice = load_choice(paths)
     except PersistError as exc:
-        add_alert(paths, "error", "conf invalide : {}".format(exc))
-        return {"exported": [], "skipped": [{"iqn": "*", "reason": str(exc)}]}
+        message = "conf invalide : {}".format(exc)
+        add_alert(paths, "error", message)
+        enter_diagnostic(paths, message)
+        return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     if not choice or not choice.get("conf"):
         add_alert(paths, "info", "aucun support de conf choisi : rien n'est exporté")
         return {"exported": [], "skipped": []}
     if choice.get("version") != 2:
         message = "version de support refusée"
         add_alert(paths, "error", message)
+        enter_diagnostic(paths, message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
     conf_volume = probe.get_volume(choice["conf"]["id"])
     mismatch = identity_problem(choice["conf"], conf_volume, "support de conf")
     if mismatch:
         add_alert(paths, "error", mismatch)
+        enter_diagnostic(paths, mismatch)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": mismatch}]}
     try:
         document, secrets = load_exports(paths)
     except PersistError as exc:
         message = "conf invalide : {}".format(exc)
         add_alert(paths, "error", message)
+        if str(exc) != "conf absente":
+            enter_diagnostic(paths, message)
         return {"exported": [], "skipped": [{"iqn": "*", "reason": message}]}
+    retired = retired_ids(paths)
+    visible, hidden = mask_targets(document.get("targets") or [])
+    for target in hidden:
+        iqn = target.get("iqn") or "?"
+        add_alert(paths, "error", "{} : LUN invisible, aucune ACL".format(iqn), secrets.values())
+        skipped.append({"iqn": iqn, "reason": "aucune ACL"})
     plan = document.get("network") or {}
     claimed = set()
     extras = not undone(paths, "extra-portals")
-    for target in document["targets"]:
+    for target in visible:
         iqn = target.get("iqn") or "?"
+        volume_id = (target.get("volume") or {}).get("id")
+        if volume_id in retired:
+            add_alert(paths, "error", "{} : disque retiré".format(iqn), secrets.values())
+            skipped.append({"iqn": iqn, "reason": "disque retiré"})
+            continue
         reason = _target_problem(target, plan, probe, secrets, claimed, extras)
         if reason:
             add_alert(paths, "error", "{} : {}".format(iqn, reason), secrets.values())
@@ -268,18 +288,16 @@ class RtslibBackend:
             assert_usable(volume)
         except SafetyError as exc:
             raise ExportError(str(exc)) from exc
-        name = _safe_name(target["iqn"])
+        safe = _safe_name(target["iqn"])
         storage = None
         tgt = None
         try:
-            storage = BlockStorageObject(name, dev=volume["path"])
+            storage = BlockStorageObject(safe, dev=volume["path"])
             fabric = FabricModule("iscsi")
             tgt = Target(fabric, target["iqn"], mode="create")
             tpg = TPG(tgt, 1, mode="create")
-            tpg.set_attribute("generate_node_acls", 0)
-            tpg.set_attribute("cache_dynamic_acls", 0)
-            tpg.set_attribute("demo_mode_write_protect", 1)
-            tpg.set_attribute("authentication", 1)
+            for guard, value in portal_guards().items():
+                tpg.set_attribute(guard, value)
             try:
                 tpg.set_parameter("AuthMethod", "CHAP")
             except Exception:
@@ -307,6 +325,16 @@ class RtslibBackend:
             node.chap_password = secret
             MappedLUN(node, int(target["lun"]), tpg_lun=lun, write_protect=False)
             _apply_measured_iscsi(tpg)
+            # ALUA et UNMAP sont à côté de l'export : leur échec le laisse servi.
+            try:
+                from san_tui.fabric import apply_export_features
+                try:
+                    interfaces = probe.list_interfaces()
+                except Exception:
+                    interfaces = []
+                apply_export_features(storage, tgt, target, secret, interfaces)
+            except Exception:
+                pass
             tpg.enable = True
             if target.get("iser") == "on":
                 try:
@@ -327,7 +355,17 @@ class RtslibBackend:
             raise
         # Le secret ne doit pas rester dans l'environnement du processus.
         os.environ.pop("SAN_CHAP_SECRET", None)
-        return name
+        return safe
+
+
+def portal_guards():
+    """Aucun LUN n'est visible sans ACL. Le mode démo reste fermé."""
+    return {
+        "generate_node_acls": 0,
+        "cache_dynamic_acls": 0,
+        "demo_mode_write_protect": 1,
+        "authentication": 1,
+    }
 
 
 def _enable_iser(portals):

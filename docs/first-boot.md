@@ -23,3 +23,5 @@ Rien de ce qui suit ne se demande au premier boot. Si le matériel ou le module 
 - Le MTU 9000 n'est posé qu'après un ping dont le bit DF est positionné. S'il échoue, ou s'il n'y a pas de passerelle, l'interface reste à 1500. `san-tui mtu-undo` fixe 1500.
 - Deux interfaces de stockage sans adresse propre sont agrégées. Sans annonce LACP du commutateur, le mode est active-backup. `san-tui bond-undo` retire l'agrégat.
 - Un nom DNS déjà publié est affiché à côté du portail. Il ne remplace pas l'adresse. S'il n'y a pas de nom, rien n'est demandé.
+NTP, le relevé d'erreurs SCSI, la latence par LUN, les canaux de mise à jour et l'image de secours démarrent sans formulaire. Un bouton de la WebUI ne fait qu'annuler un choix déjà fait. Leur échec ne coupe pas iSCSI.
+Le certificat HTTPS de la WebUI est régénéré à chaque démarrage dans `/var/lib/san/webui/tls`. La clé privée n'est pas dans l'ISO. La session WebUI expire après dix minutes sans activité. iSCSI n'en dépend pas. Le mode usine n'efface la configuration que si le fichier `/etc/san/factory` est présent, et il ne touche pas aux données des LUN. Un démarrage normal ne crée pas ce fichier.

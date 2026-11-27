@@ -67,8 +67,14 @@ install_sh=$REPO_ROOT/live24/tui/install.sh
 "$install_sh" "$ROOT"
 "$SCRIPT_DIR/install-webui.sh" "$ROOT"
 install -m 0644 "$SCRIPT_DIR/webui/front.mjs" "$ROOT/usr/lib/san-webui/front.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/boards.mjs" "$ROOT/usr/lib/san-webui/boards.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/guard.mjs" "$ROOT/usr/lib/san-webui/guard.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/audit-route.mjs" "$ROOT/usr/lib/san-webui/audit-route.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/session.mjs" "$ROOT/usr/lib/san-webui/session.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/status.mjs" "$ROOT/usr/lib/san-webui/status.mjs"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
+cp -a "$REPO_ROOT/docs/rollback.md" "$ROOT/usr/share/san/rollback.txt"
 chmod 0755 \
     "$ROOT/usr/local/sbin/san-live-boot" \
     "$ROOT/usr/local/sbin/san-conf-bind" \
@@ -88,7 +94,21 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
-    "$ROOT/usr/local/sbin/san-release-listen"
+    "$ROOT/usr/local/sbin/san-webui-roles" \
+    "$ROOT/usr/local/sbin/san-webui-cert" \
+    "$ROOT/usr/local/sbin/san-syslog" \
+    "$ROOT/usr/local/sbin/san-release-listen" \
+    "$ROOT/usr/local/sbin/san-release-apply" \
+    "$ROOT/usr/local/sbin/san-channels" \
+    "$ROOT/usr/local/sbin/san-rescue" \
+    "$ROOT/usr/local/sbin/san-latency" \
+    "$ROOT/usr/local/sbin/san-scsi-log" \
+    "$ROOT/usr/local/sbin/san-ntp" \
+    "$ROOT/usr/local/sbin/san-comfort" \
+    "$ROOT/usr/local/sbin/san-replicate" \
+    "$ROOT/usr/local/sbin/san-inventory-api" \
+    "$ROOT/usr/local/sbin/san-metrics" \
+    "$ROOT/usr/local/sbin/san-retire"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -140,8 +160,27 @@ systemctl --root="$ROOT" enable \
     san-ollama.service \
     san-ssh.service \
     san-webui-secrets.service \
+    san-webui-roles.service \
+    san-webui-cert.service \
     san-webui.service \
-    san-release.service
+    san-release.service \
+    san-channels.service \
+    san-rescue.service \
+    san-latency.service \
+    san-scsi-log.service \
+    san-ntp.service \
+    san-syslog.service \
+    san-release-apply.service \
+    san-factory.service \
+    san-config-import.service \
+    san-config-export.service \
+    san-comfort.service \
+    san-replicate.service \
+    san-inventory-api.service \
+    san-metrics.service \
+    san-retire.service
+systemctl --root="$ROOT" disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
+systemctl --root="$ROOT" mask systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -192,7 +231,21 @@ Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
+[ ! -e "$ROOT/var/lib/san/webui/tls/key.pem" ] || die "webui private key is baked into the image"
+[ ! -e "$ROOT/etc/san/factory" ] || die "factory marker is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
+if grep -R -l -E 'BEGIN (OPENSSH |RSA |EC |ENCRYPTED )?PRIVATE KEY' \
+    "$ROOT/usr" "$ROOT/etc" "$ROOT/var" 2>/dev/null | grep -q .; then
+    die "a private key is baked into the image"
+fi
+[ -f "$ROOT/usr/share/san/kernel-pin" ] || die "kernel pin missing from the image"
+grep -Eq '^6\.8\.0-[0-9]+\.[0-9]+$' "$ROOT/usr/share/san/kernel-pin" \
+    || die "kernel pin is not a 6.8 package"
+[ ! -e "$ROOT/run/san/webui-roles.json" ] || die "WebUI role passwords are baked into the image"
+[ ! -e "$ROOT/etc/san/syslog.json" ] || die "a syslog target is baked into the image"
+[ ! -e "$ROOT/etc/rsyslog.d/99-san-remote.conf" ] || die "a syslog forwarder is baked into the image"
+[ ! -e "$ROOT/var/lib/san/conf/audit.key" ] || die "an audit key is baked into the image"
+[ ! -e "$ROOT/etc/san/audit.key" ] || die "an audit key is baked into the image"
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
 if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then
     die "san-webui.service must not launch server/index.mjs"

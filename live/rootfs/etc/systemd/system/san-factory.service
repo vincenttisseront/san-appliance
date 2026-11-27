@@ -1,0 +1,13 @@
+[Unit]
+Description=Clear SAN config when the factory marker is present
+DefaultDependencies=no
+ConditionPathExists=/etc/san/factory
+After=san-conf-bind.service
+Before=san-config-import.service san-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-tui factory
+
+[Install]
+WantedBy=multi-user.target

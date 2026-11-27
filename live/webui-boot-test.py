@@ -177,10 +177,12 @@ def main():
             require(len(fields) >= 4, "ligne ss illisible: {}".format(line))
             require(fields[3] == "127.0.0.1:3000", "écoute hors loopback: {}".format(line))
         code, status = serial.run(
-            "python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:3000/', timeout=15); print(r.status)\"",
+            "python3 -c \"import ssl,urllib.request; c=ssl.create_default_context(cafile='/var/lib/san/webui/tls/cert.pem'); r=urllib.request.urlopen('https://127.0.0.1:3000/', timeout=15, context=c); print(r.status)\"",
             timeout=40,
         )
-        require(code == 0 and ("200" in status or "302" in status), "HTTP loopback en échec\n" + status[-500:])
+        require(code == 0 and ("200" in status or "302" in status), "HTTPS loopback en échec\n" + status[-500:])
+        code, mode = serial.run("sudo -n stat -c %a /var/lib/san/webui/tls/key.pem", timeout=20)
+        require(code == 0 and "640" in mode, "clé TLS mode inattendu\n" + mode[-200:])
         code, mode = serial.run("sudo -n stat -c %a /var/lib/san/webui/webui.env", timeout=20)
         require(code == 0 and "640" in mode, "webui.env mode inattendu\n" + mode[-200:])
         code, names = serial.run("sudo -n awk -F= 'NF {print $1}' /var/lib/san/webui/webui.env | sort", timeout=20)
