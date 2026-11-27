@@ -251,9 +251,9 @@ printf '%s  %s\n' "$sha" "$(basename "$ISO")" > "$ISO.sha256"
     sha256sum -c "$(basename "$ISO.sha256")"
 )
 
-git_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+git_commit=$(git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty=false
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
+if [ -n "$(git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
     git_dirty=true
 fi
 built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)

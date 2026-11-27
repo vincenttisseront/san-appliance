@@ -173,9 +173,9 @@ def main():
         rows = [line for line in listeners.splitlines() if ":3000" in line]
         require(rows, "aucun listener sur le port 3000\n" + listeners[-500:])
         for line in rows:
-            fields = line.split()
-            require(len(fields) >= 4, "ligne ss illisible: {}".format(line))
-            require(fields[3] == "127.0.0.1:3000", "écoute hors loopback: {}".format(line))
+            addresses = re.findall(r"(\d+\.\d+\.\d+\.\d+):3000", line)
+            require(addresses, "ligne ss illisible: {}".format(line))
+            require(addresses == ["127.0.0.1"], "écoute hors loopback: {}".format(line))
         code, status = serial.run(
             "python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:3000/', timeout=15); print(r.status)\"",
             timeout=40,
