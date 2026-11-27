@@ -67,6 +67,8 @@ install_sh=$REPO_ROOT/live24/tui/install.sh
 "$install_sh" "$ROOT"
 "$SCRIPT_DIR/install-webui.sh" "$ROOT"
 install -m 0644 "$SCRIPT_DIR/webui/front.mjs" "$ROOT/usr/lib/san-webui/front.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/session.mjs" "$ROOT/usr/lib/san-webui/session.mjs"
+install -m 0644 "$SCRIPT_DIR/webui/status.mjs" "$ROOT/usr/lib/san-webui/status.mjs"
 install -d -m 0755 "$ROOT/usr/share/san"
 cp -a "$REPO_ROOT/docs/first-boot.md" "$ROOT/usr/share/san/first-boot.txt"
 chmod 0755 \
@@ -84,7 +86,9 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-tui" \
     "$ROOT/usr/local/sbin/san-webui-listen-check" \
     "$ROOT/usr/local/sbin/san-webui-secrets" \
-    "$ROOT/usr/local/sbin/san-release-listen"
+    "$ROOT/usr/local/sbin/san-webui-cert" \
+    "$ROOT/usr/local/sbin/san-release-listen" \
+    "$ROOT/usr/local/sbin/san-release-apply"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -132,8 +136,13 @@ systemctl --root="$ROOT" enable \
     san-ollama.service \
     san-ssh.service \
     san-webui-secrets.service \
+    san-webui-cert.service \
     san-webui.service \
-    san-release.service
+    san-release.service \
+    san-release-apply.service \
+    san-factory.service \
+    san-config-import.service \
+    san-config-export.service
 
 log "initramfs"
 mount --bind /proc "$ROOT/proc"
@@ -184,6 +193,8 @@ Path("/usr/share/san/io-uring.txt").write_text(text + "\n", encoding="utf-8")
 PY
 
 [ ! -e "$ROOT/var/lib/san/webui/webui.env" ] || die "webui.env is baked into the image"
+[ ! -e "$ROOT/var/lib/san/webui/tls/key.pem" ] || die "webui private key is baked into the image"
+[ ! -e "$ROOT/etc/san/factory" ] || die "factory marker is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
 grep -q '/usr/lib/san-webui/scripts/serve-local.mjs' "$ROOT/etc/systemd/system/san-webui.service"
 if grep -q 'server/index.mjs' "$ROOT/etc/systemd/system/san-webui.service"; then

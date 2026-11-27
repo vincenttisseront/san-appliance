@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import ssl
 import subprocess
 import tarfile
 import threading
@@ -64,6 +65,10 @@ def listeners():
     return rows
 
 
+OLD = archive({
+    "health": "#!/bin/sh\nexit 0\n",
+    "version": "0\n",
+})
 GOOD = archive({
     "health": "#!/bin/sh\nexit 0\n",
     "version": "2\n",
@@ -80,6 +85,7 @@ BLOBS = {
     "good": (GOOD, "{}  {}\n".format(sha256(GOOD), ASSET)),
     "sick": (SICK, "{}  {}\n".format(sha256(SICK), ASSET)),
     "bad": (BAD, "{}  {}\n".format("0" * 64, ASSET)),
+    "old": (OLD, "{}  {}\n".format(sha256(OLD), ASSET)),
 }
 
 
@@ -112,8 +118,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def post_update(tag):
     payload = json.dumps({"tag": tag, "api": API}).encode()
-    _status, body = fetch(
-        "http://127.0.0.1:3000/appliance-update",
+    _status, body, _headers = fetch(
+        "https://127.0.0.1:3000/appliance-update",
         data=payload,
         headers={"content-type": "application/json"},
     )
@@ -150,11 +156,14 @@ def iscsi_up():
 
 def fetch(url, data=None, headers=None):
     last = None
+    context = None
+    if url.startswith("https://"):
+        context = ssl.create_default_context(cafile="/var/lib/san/webui/tls/cert.pem")
     for _ in range(20):
         try:
             request = Request(url, data=data, headers=headers or {})
-            with urlopen(request, timeout=30) as response:
-                return response.status, response.read()
+            with urlopen(request, timeout=30, context=context) as response:
+                return response.status, response.read(), response.headers
         except Exception as exc:
             last = exc
             time.sleep(2)
@@ -162,9 +171,20 @@ def fetch(url, data=None, headers=None):
 
 
 def main():
-    status, page = fetch("http://127.0.0.1:3000/appliance-update")
+    status, page, page_headers = fetch("https://127.0.0.1:3000/appliance-update")
     require(status == 200 and "Mise à jour" in page.decode(), "page WebUI absente")
-    status, _body = fetch("http://127.0.0.1:3000/")
+    text = page.decode()
+    require("name=\"tag\"" not in text and "Appliquer" not in text, "formulaire d'application encore présent")
+    require("le plus récent" in text, "date de slot absente")
+    cookie = page_headers.get("set-cookie") or ""
+    require("san_session=" in cookie and "Max-Age=600" in cookie, "session courte absente: {}".format(cookie))
+    key = Path("/var/lib/san/webui/tls/key.pem")
+    require(key.is_file(), "clé WebUI absente")
+    require(key.stat().st_mode & 0o007 == 0, "clé WebUI lisible par tous")
+    for medium in (Path("/cdrom"), Path("/run/live/medium")):
+        if medium.is_dir():
+            require(not any(medium.rglob("key.pem")), "clé privée dans l'ISO")
+    status, _body, _headers = fetch("https://127.0.0.1:3000/")
     require(status in {200, 302}, "WebUI HTTP {}".format(status))
 
     disk = choose_disk()
@@ -235,8 +255,15 @@ def main():
 
     good = post_update("good")
     require(good.get("applied") is True and good.get("slot") == "b", "release saine: {}".format(good))
+    require("version" in (good.get("diff") or ""), "diff absent avant application: {}".format(good))
     require((app / "b" / "version").read_text(encoding="utf-8") == "2\n", "version du slot")
     require((app / "a" / "version").read_text(encoding="utf-8") == "1\n", "ancien slot modifié")
+    state = json.loads((app / "state.json").read_text(encoding="utf-8"))
+    require(state["slots"]["b"].get("installed"), "horodatage absent: {}".format(state))
+    older = post_update("old")
+    require(older.get("applied") is not True, "release ancienne appliquée: {}".format(older))
+    state = json.loads((app / "state.json").read_text(encoding="utf-8"))
+    require(state["active"] == "b", "slot changé par une release ancienne: {}".format(state))
 
     require(file_sha(marker) == before_marker, "marqueur data modifié")
     require(file_sha(export) == after_create, "LUN modifié")

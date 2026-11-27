@@ -68,6 +68,11 @@ def main(argv=None):
     release_p = sub.add_parser("release-apply", help="appliquer une release GitHub sur le slot inactif")
     release_p.add_argument("--tag", default="")
     release_p.add_argument("--api", default="")
+    sub.add_parser("release-status", help="slots, dates et diff, sans rien appliquer")
+    sub.add_parser("release-undo", help="revenir au slot précédent")
+    sub.add_parser("config-export", help="reconstruire le fichier de conf déjà téléchargeable")
+    sub.add_parser("config-import", help="importer la conf déposée, par WWN, sans écran de mapping")
+    sub.add_parser("factory", help="effacer la conf si le marqueur usine est présent")
     sub.add_parser("ollama-advise", help="conseiller optionnel, sans bloquer les exports")
     sub.add_parser("rollback", help="revenir à la sauvegarde précédente puis rétablir")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
@@ -133,6 +138,27 @@ def main(argv=None):
                 api=args.api,
                 token=token,
             ))
+        if args.command == "release-status":
+            from san_tui.release import release_status
+            return _print(release_status(paths))
+        if args.command == "release-undo":
+            from san_tui.release import undo_slot
+            return _print(undo_slot(paths))
+        if args.command == "config-export":
+            from san_tui.configio import refresh_export
+            try:
+                ready = refresh_export(paths)
+            except PersistError as exc:
+                if "absente" in str(exc):
+                    return _print({"ready": False, "reason": str(exc)})
+                raise
+            return _print({"ready": True, "path": ready})
+        if args.command == "config-import":
+            from san_tui.configio import import_incoming
+            return _print(import_incoming(paths, probe))
+        if args.command == "factory":
+            from san_tui.configio import factory_reset
+            return _print(factory_reset(paths))
         if args.command == "ollama-advise":
             from san_tui.runtime import advise
             return _print(advise(paths))

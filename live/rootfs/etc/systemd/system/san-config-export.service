@@ -1,0 +1,12 @@
+[Unit]
+Description=Build the versioned config file before anyone downloads it
+ConditionPathExists=/var/lib/san/conf/exports.json
+After=san-config-import.service san-conf-bind.service
+Before=san-webui.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-tui config-export
+
+[Install]
+WantedBy=multi-user.target
