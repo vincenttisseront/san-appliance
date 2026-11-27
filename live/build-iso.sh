@@ -108,7 +108,15 @@ chmod 0755 \
     "$ROOT/usr/local/sbin/san-replicate" \
     "$ROOT/usr/local/sbin/san-inventory-api" \
     "$ROOT/usr/local/sbin/san-metrics" \
-    "$ROOT/usr/local/sbin/san-retire"
+    "$ROOT/usr/local/sbin/san-retire" \
+    "$ROOT/usr/local/sbin/san-quota" \
+    "$ROOT/usr/local/sbin/san-snapshot" \
+    "$ROOT/usr/local/sbin/san-clone" \
+    "$ROOT/usr/local/sbin/san-thin" \
+    "$ROOT/usr/local/sbin/san-crypt" \
+    "$ROOT/usr/local/sbin/san-chap-rotate" \
+    "$ROOT/usr/local/sbin/san-portal-watch" \
+    "$ROOT/usr/local/sbin/san-lacp"
 chown root:root "$ROOT/etc/sudoers.d" "$ROOT/etc/sudoers.d/sanadmin"
 chmod 0755 "$ROOT/etc/sudoers.d"
 chmod 0440 "$ROOT/etc/sudoers.d/sanadmin"
@@ -178,7 +186,15 @@ systemctl --root="$ROOT" enable \
     san-replicate.service \
     san-inventory-api.service \
     san-metrics.service \
-    san-retire.service
+    san-retire.service \
+    san-quota.service \
+    san-snapshot.service \
+    san-clone.service \
+    san-thin.service \
+    san-crypt.service \
+    san-chap-rotate.timer \
+    san-portal-watch.service \
+    san-lacp.service
 systemctl --root="$ROOT" disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
 systemctl --root="$ROOT" mask systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
@@ -234,6 +250,9 @@ PY
 [ ! -e "$ROOT/var/lib/san/webui/tls/key.pem" ] || die "webui private key is baked into the image"
 [ ! -e "$ROOT/etc/san/factory" ] || die "factory marker is baked into the image"
 [ ! -e "$ROOT/etc/san/github.token" ] || die "a GitHub token is baked into the image"
+if find "$ROOT" \( -name volume.key -o -name secrets.json \) | grep -q .; then
+    die "a volume key or CHAP secret is baked into the image"
+fi
 if grep -R -l -E 'BEGIN (OPENSSH |RSA |EC |ENCRYPTED )?PRIVATE KEY' \
     "$ROOT/usr" "$ROOT/etc" "$ROOT/var" 2>/dev/null | grep -q .; then
     die "a private key is baked into the image"

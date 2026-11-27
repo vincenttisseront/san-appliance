@@ -19,6 +19,9 @@ if [ "$mode" = diagnostic ]; then
         san-nvme.service san-ab.service san-perf.service \
         san-channels.service san-latency.service \
         san-comfort.service san-replicate.service san-retire.service \
+        san-quota.service san-snapshot.service san-clone.service \
+        san-thin.service san-crypt.service san-lacp.service \
+        san-portal-watch.service san-chap-rotate.timer \
         >/dev/null 2>&1 || true
 fi
 

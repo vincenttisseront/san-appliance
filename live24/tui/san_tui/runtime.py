@@ -683,6 +683,15 @@ def _configfs_subsystem(item, device):
     subs = root / "nvmet/subsystems" / nqn
     subs.mkdir(parents=True, exist_ok=True)
     (subs / "attr_allow_any_host").write_text("0\n", encoding="utf-8")
+    try:
+        from san_tui.queues import apply_nvme_queues
+        report = apply_nvme_queues(subs)
+        Path("/run/san").mkdir(parents=True, exist_ok=True)
+        (Path("/run/san") / "nvme-queues.json").write_text(
+            json.dumps(report, ensure_ascii=False) + "\n", encoding="utf-8",
+        )
+    except Exception:
+        pass
     ns = subs / "namespaces/1"
     ns.mkdir(parents=True, exist_ok=True)
     try:

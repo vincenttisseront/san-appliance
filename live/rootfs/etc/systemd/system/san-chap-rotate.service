@@ -1,0 +1,9 @@
+[Unit]
+Description=Tourne le CHAP sans couper les sessions
+After=san-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/san-chap-rotate
+StandardOutput=journal+console
+StandardError=journal+console

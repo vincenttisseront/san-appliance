@@ -90,6 +90,23 @@ def main(argv=None):
     sub.add_parser("syslog-local", help="annuler le syslog distant")
     sub.add_parser("webui-unlock", help="lever le verrou de la WebUI")
     sub.add_parser("toram-measure", help="mesurer la RAM, sans activer toram")
+    sub.add_parser("quota-apply", help="poser les quotas du profil de volume")
+    quota_undo = sub.add_parser("quota-undo", help="retirer le quota automatique")
+    quota_undo.add_argument("--volume", default="")
+    sub.add_parser("snapshot-auto", help="prendre les instantanés crash-consistent")
+    snap_undo = sub.add_parser("snapshot-rollback", help="revenir un seul LUN à son instantané")
+    snap_undo.add_argument("--volume", default="")
+    sub.add_parser("clone-auto", help="cloner le LUN vers le seul volume libre")
+    sub.add_parser("clone-undo", help="retirer le clone automatique")
+    sub.add_parser("thin-auto", help="pool thin, alerte, réserve")
+    sub.add_parser("crypt-auto", help="ouvrir ou chiffrer, clé hors de l'ISO")
+    sub.add_parser("chap-rotate", help="tourner le CHAP sans couper les sessions")
+    sub.add_parser("chap-undo", help="reposer le secret CHAP précédent")
+    sub.add_parser("portal-once", help="ouvrir le portail de secours si le lien est tombé")
+    sub.add_parser("portal-watch", help="surveiller le lien de stockage")
+    sub.add_parser("portal-undo", help="retirer le portail de secours et les portails ajoutés")
+    sub.add_parser("lacp-auto", help="agréger le stockage si LACP est annoncé")
+    sub.add_parser("lacp-undo", help="retirer l'agrégat automatique")
     sub.add_parser("health-check", help="alertes SMART et température, sans changer les exports")
     sub.add_parser("raid-scrub", help="scrub planifié, avec plafond de débit")
     sub.add_parser("raid-scrub-stop", help="arrêter le scrub automatique")
@@ -97,7 +114,6 @@ def main(argv=None):
     sub.add_parser("raid-pace-undo", help="retirer le plafond de reconstruction")
     sub.add_parser("raid-spare-undo", help="retirer le spare ajouté automatiquement")
     sub.add_parser("portal-drop", help="retirer un portail dont l'adresse a disparu")
-    sub.add_parser("portal-undo", help="retirer les portails ajoutés automatiquement")
     sub.add_parser("iser-undo", help="désactiver iSER, le portail TCP reste")
     sub.add_parser("bond-undo", help="retirer l'agrégat automatique")
     sub.add_parser("mtu-undo", help="revenir à un MTU de 1500")
@@ -296,6 +312,11 @@ def main(argv=None):
         if args.command == "toram-measure":
             from san_tui.runtime import measure_toram
             return _print(measure_toram(paths, _mem_kib(), _squash_bytes()))
+        if args.command in _AUTO_COMMANDS:
+            try:
+                return _print(_auto(args, paths, probe))
+            except Exception as exc:
+                return _print({"ok": False, "reason": exc.__class__.__name__})
         if args.command == "health-check":
             from san_tui.comfort import run_health
             return _print(run_health(paths, probe))
@@ -318,9 +339,6 @@ def main(argv=None):
         if args.command == "portal-drop":
             from san_tui.comfort import drop_absent_portals
             return _print(drop_absent_portals(paths, probe, "/sys/kernel/config"))
-        if args.command == "portal-undo":
-            from san_tui.comfort import undo_extra_portals
-            return _print(undo_extra_portals(paths, "/sys/kernel/config"))
         if args.command == "iser-undo":
             from san_tui.comfort import undo_iser
             return _print(undo_iser(paths, "/sys/kernel/config"))
@@ -372,6 +390,72 @@ def main(argv=None):
         return 2
     parser.error("commande inconnue")
     return 2
+
+
+def _print(payload):
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+_AUTO_COMMANDS = {
+    "quota-apply", "quota-undo", "snapshot-auto", "snapshot-rollback",
+    "clone-auto", "clone-undo", "thin-auto", "crypt-auto",
+    "chap-rotate", "chap-undo", "portal-once", "portal-watch", "portal-undo",
+    "lacp-auto", "lacp-undo",
+}
+
+
+def _auto(args, paths, probe):
+    if args.command == "quota-apply":
+        from san_tui.quota import apply_quotas
+        return apply_quotas(paths, probe)
+    if args.command == "quota-undo":
+        from san_tui.quota import undo_quota
+        return undo_quota(paths, probe, args.volume or None)
+    if args.command == "snapshot-auto":
+        from san_tui.snapshot import take
+        return take(paths, probe)
+    if args.command == "snapshot-rollback":
+        from san_tui.snapshot import rollback
+        return rollback(paths, probe, args.volume or None)
+    if args.command == "clone-auto":
+        from san_tui.clone import clone
+        return clone(paths, probe)
+    if args.command == "clone-undo":
+        from san_tui.clone import undo
+        return undo(paths)
+    if args.command == "thin-auto":
+        from san_tui.thin import ensure_pools
+        return ensure_pools(paths)
+    if args.command == "crypt-auto":
+        from san_tui.luks import prepare
+        return prepare(paths, probe)
+    if args.command == "chap-rotate":
+        from san_tui.chap import rotate
+        return rotate(paths)
+    if args.command == "chap-undo":
+        from san_tui.chap import undo
+        return undo(paths)
+    if args.command == "portal-once":
+        from san_tui.portal import once
+        return once(paths, probe)
+    if args.command == "portal-watch":
+        from san_tui.portal import watch
+        watch(paths, probe)
+        return {"ok": True}
+    if args.command == "portal-undo":
+        from san_tui.portal import undo as undo_standby
+        from san_tui.comfort import undo_extra_portals
+        standby = undo_standby(paths, probe)
+        extra = undo_extra_portals(paths, "/sys/kernel/config")
+        return {"standby": standby, "extra": extra}
+    if args.command == "lacp-auto":
+        from san_tui.lacp import apply_lacp
+        return apply_lacp(paths, probe)
+    if args.command == "lacp-undo":
+        from san_tui.lacp import undo
+        return undo(paths, probe)
+    return {"ok": False, "reason": "commande inconnue"}
 
 
 def _need_volume(probe, short_id):
@@ -426,8 +510,3 @@ def _unlock_webui(paths):
     if path.is_file():
         path.unlink()
     return {"locked": False}
-
-
-def _print(payload):
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
-    return 0

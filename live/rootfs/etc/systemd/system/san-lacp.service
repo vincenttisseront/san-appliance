@@ -1,0 +1,14 @@
+[Unit]
+Description=LACP stockage seulement si le commutateur l'annonce
+After=san-net-apply.service
+Before=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-lacp
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

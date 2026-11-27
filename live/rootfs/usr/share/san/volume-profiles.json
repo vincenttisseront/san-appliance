@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "profiles": {
+    "small": {"iops": 1500, "throughput_bps": 31457280},
+    "standard": {"iops": 8000, "throughput_bps": 209715200},
+    "large": {"iops": 20000, "throughput_bps": 838860800}
+  }
+}

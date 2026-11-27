@@ -1,0 +1,10 @@
+[Unit]
+Description=Rotation automatique du CHAP
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1d
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

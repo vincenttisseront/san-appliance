@@ -1,0 +1,14 @@
+[Unit]
+Description=Second portail iSCSI si le lien de stockage tombe
+After=san-restore.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=2s
+ExecStart=/usr/local/sbin/san-portal-watch
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Pose les quotas IOPS et débit du profil de volume
+After=san-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/san-quota
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

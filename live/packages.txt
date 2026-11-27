@@ -23,6 +23,8 @@ targetcli-fb
 open-iscsi
 mdadm
 lvm2
+cryptsetup
+thin-provisioning-tools
 openssh-server
 rsyslog
 fio

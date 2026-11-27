@@ -1,5 +1,5 @@
 # Targets for the Ubuntu 24.04 live ISO. The 26.04 image stays in image/.
-.PHONY: doctor iso test-unit test-iscsi test-features test-boot test-perf test-webui
+.PHONY: doctor iso test-unit test-iscsi test-features test-boot test-perf test-webui test-capacity
 
 doctor:
 	live/doctor.sh
@@ -24,3 +24,6 @@ test-perf:
 
 test-webui:
 	sudo live/webui-boot-test.sh
+
+test-capacity:
+	sudo live/capacity-vm-test.sh
