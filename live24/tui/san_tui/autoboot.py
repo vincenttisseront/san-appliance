@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 
 from san_tui.alerts import add_alert
+from san_tui.auto import undone
 from san_tui.evolve import (
     assign_exports,
     backup_matches,
-    choose_governor,
     choose_network,
     export_refusal,
     format_refusal,
@@ -76,15 +76,13 @@ def auto_boot(paths, volumes, interfaces, diagnostic=False, label_present=False,
             create_layout(layout)
         except Exception as exc:
             add_alert(paths, "error", "RAID ou LVM non créé : {}".format(exc.__class__.__name__))
-    governor = choose_governor(cpufreq)
-    result["governor"] = governor
-    if governor["set"]:
-        try:
-            _set_performance()
-        except Exception:
-            add_alert(paths, "info", "cpufreq présent mais gouverneur non posé")
-            result["governor"] = {"set": False, "reason": "gouverneur non posé"}
+    from san_tui.tune import apply_governor
+    if undone(paths, "governor"):
+        governor = {"set": False, "reason": "gouverneur retiré"}
     else:
+        governor = apply_governor(paths, cpufreq)
+    result["governor"] = governor
+    if not governor["set"]:
         add_alert(paths, "info", governor["reason"])
     uring = io_uring_decision(rtslib_uring, kernel_uring)
     result["io_uring"] = uring
@@ -265,15 +263,6 @@ def _reveal_chap(paths, secret):
         pass
     finally:
         os.close(fd)
-
-
-def _set_performance():
-    root = Path("/sys/devices/system/cpu")
-    paths = list(root.glob("cpu[0-9]*/cpufreq/scaling_governor"))
-    if not paths:
-        raise OSError("cpufreq absent")
-    for path in paths:
-        path.write_text("performance", encoding="utf-8")
 
 
 def _public_network(plan):

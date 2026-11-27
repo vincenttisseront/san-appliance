@@ -21,6 +21,10 @@ class ExportError(Exception):
     pass
 
 
+class ExportSkipped(ExportError):
+    """Cette cible n'est pas créée. Les autres cibles restent servies."""
+
+
 def plan_export(volume, portal, iqn, initiator, chap_user, lun=0):
     """Contrôle un export avant toute écriture LIO. Ne contacte pas le noyau."""
     assert_usable(volume)
@@ -157,6 +161,11 @@ def restore(paths, probe, backend):
             attempt["network"] = plan
             attempt["_secrets"] = secrets
             backend.apply(attempt, secrets[ref], probe)
+        except ExportSkipped as exc:
+            reason = " ".join(str(exc).split())[:180]
+            add_alert(paths, "info", "{} : {}".format(iqn, reason), secrets.values())
+            skipped.append({"iqn": iqn, "reason": reason})
+            continue
         except Exception as exc:
             detail = " ".join(str(exc).split())[:180]
             message = "échec LIO : {} {}".format(exc.__class__.__name__, detail).strip()
@@ -176,9 +185,11 @@ def restore(paths, probe, backend):
 
 
 def _runtime_target(paths, target, plan, probe, extras):
+    from san_tui.tune import boot_portals
+
     portals = [
         attach_dns(portal, lookup_name)
-        for portal in serving_portals(target, plan, probe, extras=extras)
+        for portal in boot_portals(target, plan, probe, extras=extras)
     ]
     runtime = dict(target)
     runtime["portals"] = portals
@@ -284,7 +295,6 @@ class RtslibBackend:
         _prepare_lio()
         try:
             from rtslib_fb import (
-                BlockStorageObject,
                 FabricModule,
                 LUN,
                 MappedLUN,
@@ -304,10 +314,19 @@ class RtslibBackend:
         except SafetyError as exc:
             raise ExportError(str(exc)) from exc
         safe = _safe_name(target["iqn"])
+        device = _export_device(volume)
+        from san_tui.paths import SanPaths
+        from san_tui.tune import BackstoreSkipped, open_backstore, tune_target
+        tune_paths = SanPaths(os.environ.get("SAN_ROOT"))
+        try:
+            opened, open_notes = open_backstore(safe, device, volume, tune_paths)
+        except BackstoreSkipped as exc:
+            raise ExportSkipped(str(exc)) from exc
         storage = None
         tgt = None
         try:
-            storage = BlockStorageObject(safe, dev=_export_device(volume))
+            storage = opened
+            self.notes.extend(open_notes)
             _enable_pr(storage)
             fabric = FabricModule("iscsi")
             tgt = Target(fabric, target["iqn"], mode="create")
@@ -343,6 +362,10 @@ class RtslibBackend:
             lun = LUN(tpg, int(target["lun"]), storage_object=storage)
             _map_acls(tpg, target, secret, lun, int(target["lun"]))
             _apply_measured_iscsi(tpg)
+            try:
+                self.notes.extend(tune_target(tune_paths, storage, tpg, device))
+            except Exception:
+                self.notes.append("réglage iSCSI ignoré, iSCSI conservé")
             # ALUA et UNMAP sont à côté de l'export : leur échec le laisse servi.
             try:
                 from san_tui.fabric import apply_export_features
@@ -414,15 +437,29 @@ def _enable_iser(portals):
 def map_lun(target, secrets, volume, lun):
     """Ajoute un LUN à une cible déjà active, sans écrire enable."""
     _prepare_lio()
-    from rtslib_fb import BlockStorageObject, FabricModule, LUN, MappedLUN, NodeACL, TPG, Target
+    from rtslib_fb import FabricModule, LUN, MappedLUN, NodeACL, TPG, Target
     _ = (MappedLUN, NodeACL)
     device = _export_device(volume)
-    storage = BlockStorageObject(_safe_name("{}-{}".format(target.get("iqn"), lun)), dev=device)
+    from san_tui.paths import SanPaths
+    from san_tui.tune import BackstoreSkipped, open_backstore, tune_target
+    try:
+        storage, _notes = open_backstore(
+            _safe_name("{}-{}".format(target.get("iqn"), lun)),
+            device,
+            volume,
+            SanPaths(os.environ.get("SAN_ROOT")),
+        )
+    except BackstoreSkipped as exc:
+        raise ExportSkipped(str(exc)) from exc
     _enable_pr(storage)
     fabric = FabricModule("iscsi")
     tgt = Target(fabric, target["iqn"], mode="lookup")
     tpg = TPG(tgt, 1, mode="lookup")
     lun_obj = LUN(tpg, int(lun), storage_object=storage)
+    try:
+        tune_target(SanPaths(os.environ.get("SAN_ROOT")), storage, tpg, device)
+    except Exception:
+        pass
     stored = secrets if isinstance(secrets, dict) else {}
     _map_acls(tpg, target, stored.get((target.get("acls") or [{}])[0].get("chap_secret_ref")), lun_obj, int(lun), stored)
 
@@ -440,7 +477,7 @@ def _map_acls(tpg, target, secret, lun_obj, number, stored=None):
 
 
 def _map_extras(tpg, target, probe, secret):
-    from rtslib_fb import BlockStorageObject, LUN
+    from rtslib_fb import LUN
     notes = []
     for extra in target.get("extras") or []:
         volume = extra.get("volume") or {}
@@ -461,7 +498,19 @@ def _map_extras(tpg, target, probe, secret):
             notes.append({"volume": ident, "lun": number, "skipped": reason})
             continue
         try:
-            storage = BlockStorageObject(_safe_name("{}-{}".format(target.get("iqn"), number)), dev=_export_device(current))
+            from san_tui.paths import SanPaths
+            from san_tui.tune import BackstoreSkipped, open_backstore
+            device = _export_device(current)
+            try:
+                storage, _notes = open_backstore(
+                    _safe_name("{}-{}".format(target.get("iqn"), number)),
+                    device,
+                    current,
+                    SanPaths(os.environ.get("SAN_ROOT")),
+                )
+            except BackstoreSkipped as exc:
+                notes.append({"volume": ident, "lun": number, "skipped": str(exc)})
+                continue
             _enable_pr(storage)
             lun_obj = LUN(tpg, number, storage_object=storage)
             _map_acls(tpg, target, secret, lun_obj, number)

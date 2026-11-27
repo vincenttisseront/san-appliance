@@ -81,13 +81,21 @@ def _plain(network):
             print("san-net-apply: interface absente {}".format(iface))
             continue
         subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-        mtu = item.get("mtu")
-        peer = item.get("peer_mtu")
-        # 9000 seulement si les deux extrémités l'annoncent. Sinon 1500.
-        if mtu == 9000 and peer == 9000:
-            chosen = "9000"
-        else:
-            chosen = "1500"
+        chosen = "1500"
+        if role == "storage":
+            try:
+                from san_tui.auto import undone
+                from san_tui.link import CommandRunner
+                from san_tui.paths import SanPaths
+                from san_tui.tune import chosen_mtu
+                picked = chosen_mtu(
+                    iface,
+                    CommandRunner(),
+                    allow_jumbo=not undone(SanPaths("/"), "mtu"),
+                )
+                chosen = str(int(picked.get("mtu") or 1500))
+            except Exception:
+                chosen = "1500"
         subprocess.run(["ip", "link", "set", iface, "mtu", chosen], check=False)
         subprocess.run(["ip", "addr", "replace", address, "dev", iface], check=False)
         print("san-net-apply: {} {} dev {}".format(role, address, iface))
